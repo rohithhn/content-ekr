@@ -1,0 +1,13 @@
+/** Mirrors designer-app/src/app/utils/llmText.ts — do not diverge without updating both. */
+export const ENKRYPT_OPENAI_CHAT_MODEL = "gpt-5-chat-latest";
+export const ENKRYPT_GEMINI_CHAT_MODEL = "gemini-2.5-flash";
+
+export function openAiChatCompletionsExtras(model) {
+  if (model.startsWith("gpt-5.4")) {
+    return { reasoning: { effort: "none" } };
+  }
+  return {};
+}
+
+/** Designer visual generation uses this model (LeftPanel generateSingleVisual). */
+export const DESIGNER_OPENAI_IMAGE_MODEL = "gpt-image-1";
