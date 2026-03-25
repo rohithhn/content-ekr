@@ -1,0 +1,11 @@
+{
+  "name": "content-engine",
+  "private": true,
+  "description": "Monorepo root. The deployable Next.js app is in content-studio/. Prefer setting Vercel Root Directory to content-studio; root vercel.json is a fallback.",
+  "dependencies": {
+    "next": "^15.1.0"
+  },
+  "scripts": {
+    "build": "npm run build --prefix ./content-studio"
+  }
+}
