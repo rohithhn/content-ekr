@@ -1,7 +1,7 @@
 /**
  * Single source of truth for Enkrypt AI brand defaults across:
  * - Content Studio BrandEditor + default brand seed
- * - Landing template (`landing-template.js`)
+ * - Landing pages: full HTML from Claude (`/api/generate/text` + `enkrypt-frontend-design-SKILL.md`)
  * - Designer embed (`designer-app`, via Vite alias `@studio-brand`)
  * - Cursor skill `enkrypt-frontend-design` + bundled API markdown (sync paths/copy manually)
  *

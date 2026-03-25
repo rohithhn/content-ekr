@@ -49,6 +49,14 @@ export const CHANNELS = [
     slots: ["hero-visual", "feature-icons", "testimonial-bg", "og-image"],
     description: "Conversion-optimized page copy with full section structure",
   },
+  {
+    id: "html-video",
+    label: "HTML Video",
+    color: "#A855F7",
+    icon: "▶",
+    slots: [],
+    description: "1280×720 auto-play HTML scenes for screen recording — single file, no frameworks",
+  },
 ];
 
 /** LinkedIn multi-slide visuals (carousel-1 … carousel-3). */
@@ -163,6 +171,17 @@ export const TEMPLATES = [
     defaultTone: "Professional",
     defaultMode: "text",
     placeholder: "Describe the product/service, target audience, primary benefit, and desired conversion action...",
+  },
+  {
+    id: "html-video-builder",
+    name: "HTML Video (screen record)",
+    category: "Video",
+    channels: ["html-video"],
+    lucide: "Theater",
+    description: "Single-file 1280×720 auto-playing HTML scenes — product demos, explainers, recordable as video.",
+    defaultTone: "Bold",
+    defaultMode: "text",
+    placeholder: "What story should the video tell? Product name, audience, key proof points, desired CTA, and any must-show scenes...",
   },
   {
     id: "event-takeaways",

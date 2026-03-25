@@ -53,6 +53,45 @@ export async function generateText({
 }
 
 /**
+ * Revise existing landing `<section>…</section>` HTML from natural-language instructions.
+ * Uses POST /api/generate/text with `landingRevise` (single-shot, no creative-brief phase).
+ */
+export async function reviseLandingPage({
+  sectionsHtml,
+  instructions,
+  templateId = null,
+  brand,
+  numVariants = 1,
+  tone = "Professional",
+  stream = false,
+  apiKeys = {},
+}) {
+  const response = await fetch("/api/generate/text", {
+    method: "POST",
+    headers: buildHeaders(apiKeys),
+    body: JSON.stringify({
+      input: "(landing revise)",
+      channel: "landing",
+      templateId,
+      brand,
+      numVariants,
+      tone,
+      stream,
+      landingRevise: { sectionsHtml, instructions },
+    }),
+  });
+
+  if (stream) return response;
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.error || "Landing revise failed");
+  }
+
+  return response.json();
+}
+
+/**
  * Designer LeftPanel-equivalent: LLM returns JSON { heading, subheading, footer }.
  * Uses /api/generate/designer-structure (same prompt stack as designer-app).
  */
@@ -225,12 +264,14 @@ export async function generateContentBundle({
 
   const textPromises = channels.map(async (channelId) => {
     try {
+      const cappedVariants =
+        channelId === "landing" || channelId === "html-video" ? 1 : numTextVariants;
       const result = await generateText({
         input,
         channel: channelId,
         templateId,
         brand,
-        numVariants: numTextVariants,
+        numVariants: cappedVariants,
         tone,
         apiKeys,
       });

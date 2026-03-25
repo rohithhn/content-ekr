@@ -1,14 +1,9 @@
 "use client";
 import { useState, useEffect, useRef, useMemo } from "react";
+import { createPortal } from "react-dom";
 import { CHANNELS, TEMPLATES, TONES, INPUT_MODES, AI_MODELS, getChannelVisualSlotNames } from "@/config/constants";
-import { generateContentBundle, generateText, generateImage, generateDesignerStructure, parseUrl, prepareSourceArticle, analyzeUploadedFile, checkProviderStatus } from "@/lib/ai/orchestrator";
+import { generateContentBundle, generateText, generateImage, generateDesignerStructure, parseUrl, prepareSourceArticle, analyzeUploadedFile, checkProviderStatus, reviseLandingPage } from "@/lib/ai/orchestrator";
 import { saveBrand, loadBrands, saveProject, loadProjects, loadProjectMessages } from "@/lib/db/index";
-import { buildLandingPageHtml } from "@/lib/templates/landing-template";
-
-function landingExportOptions() {
-  if (typeof window === "undefined") return {};
-  return { assetBaseUrl: window.location.origin };
-}
 import DesignerOverlay, { primeDesignerEmbed } from "@/components/DesignerOverlay";
 import DesignerMiniPreview from "@/components/DesignerMiniPreview";
 import DesignerPreviewThumb from "@/components/DesignerPreviewThumb";
@@ -23,6 +18,28 @@ import {
   isEnkryptStudioBrand,
   syncEnkryptMarketingPrimaryToCanonical,
 } from "@/lib/brand/enkrypt-defaults";
+
+/** For html-video channel: strip markdown fences and slice from <!DOCTYPE or <html>. */
+function extractHtmlVideoDocument(text) {
+  if (!text || typeof text !== "string") return "";
+  const trimmed = text.trim();
+  const fence = /^```(?:html)?\s*\n([\s\S]*?)\n```\s*$/im.exec(trimmed);
+  if (fence) return fence[1].trim();
+  const docIdx = trimmed.search(/<!DOCTYPE\s+html/i);
+  if (docIdx >= 0) return trimmed.slice(docIdx);
+  const htmlIdx = trimmed.search(/<html[\s>]/i);
+  if (htmlIdx >= 0) return trimmed.slice(htmlIdx);
+  return trimmed;
+}
+
+/** Landing channel: same extraction as HTML video — full document from model. */
+const extractLandingPageDocument = extractHtmlVideoDocument;
+
+function isFullLandingHtml(text) {
+  if (!text || typeof text !== "string") return false;
+  const doc = extractLandingPageDocument(text).trim();
+  return /^<!DOCTYPE\s+html/i.test(doc) || /^<html[\s>]/i.test(doc);
+}
 
 /** Chevron for styled native `<select>` (no custom overlay / portal). */
 const NATIVE_SELECT_CHEVRON =
@@ -204,24 +221,37 @@ function mdToHtml(text) {
 
 function ExportModal({ open, onClose, activeChannels, currentBundle, addToast, activeBrand }) {
   if (!open) return null;
-  const formats = { linkedin: [{ label: "Copy Text", lucide: "Copy", act: "copy" }, { label: "Download Markdown", lucide: "FileText", act: "md" }], twitter: [{ label: "Copy Tweet", lucide: "Copy", act: "copy" }], blog: [{ label: "Download Markdown", lucide: "FileText", act: "md" }, { label: "Download HTML", lucide: "Globe", act: "html" }, { label: "Copy Text", lucide: "Copy", act: "copy" }], article: [{ label: "Download Markdown", lucide: "FileText", act: "md" }, { label: "Download HTML", lucide: "Globe", act: "html" }, { label: "Copy Text", lucide: "Copy", act: "copy" }], landing: [{ label: "Download Animated HTML", lucide: "Globe", act: "html" }, { label: "Open Preview in Browser", lucide: "ExternalLink", act: "preview" }, { label: "Copy Source", lucide: "Copy", act: "copy" }] };
+  const formats = { linkedin: [{ label: "Copy Text", lucide: "Copy", act: "copy" }, { label: "Download Markdown", lucide: "FileText", act: "md" }], twitter: [{ label: "Copy Tweet", lucide: "Copy", act: "copy" }], blog: [{ label: "Download Markdown", lucide: "FileText", act: "md" }, { label: "Download HTML", lucide: "Globe", act: "html" }, { label: "Copy Text", lucide: "Copy", act: "copy" }], article: [{ label: "Download Markdown", lucide: "FileText", act: "md" }, { label: "Download HTML", lucide: "Globe", act: "html" }, { label: "Copy Text", lucide: "Copy", act: "copy" }], landing: [{ label: "Download HTML", lucide: "Globe", act: "html" }, { label: "Open Preview in Browser", lucide: "ExternalLink", act: "preview" }, { label: "Copy Source", lucide: "Copy", act: "copy" }], "html-video": [{ label: "Download HTML Video", lucide: "Globe", act: "html" }, { label: "Open Preview in Browser", lucide: "ExternalLink", act: "preview" }, { label: "Copy Source", lucide: "Copy", act: "copy" }] };
   const doExport = (chId, act) => {
     const d = currentBundle?.[chId]; if (!d?.textVariants?.length) { addToast("No content to export", "warning"); return; }
     const text = d.textVariants[d.selectedTextIdx]?.text || ""; const ch = CHANNELS.find(c => c.id === chId);
     if (act === "copy") clipCopy(text).then(ok => addToast(ok ? "Copied!" : "Copy failed", ok ? "success" : "error"));
     else if (act === "md") { downloadFile(text, `${ch?.label || chId}.md`, "text/markdown"); addToast("Downloaded Markdown", "success"); }
     else if (act === "preview" && chId === "landing") {
-      const html = buildLandingPageHtml(text, activeBrand, landingExportOptions());
+      const html = extractLandingPageDocument(text);
       const blob = new Blob([html], { type: "text/html" });
       const url = URL.createObjectURL(blob);
       window.open(url, "_blank");
       setTimeout(() => URL.revokeObjectURL(url), 60000);
       addToast("Opened landing page preview", "success");
     }
+    else if (act === "preview" && chId === "html-video") {
+      const html = extractHtmlVideoDocument(text);
+      const blob = new Blob([html], { type: "text/html" });
+      const url = URL.createObjectURL(blob);
+      window.open(url, "_blank");
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+      addToast("Opened HTML video preview", "success");
+    }
     else if (act === "html") {
-      if (chId === "landing") {
-        const html = buildLandingPageHtml(text, activeBrand, landingExportOptions());
-        downloadFile(html, `${activeBrand?.company_name || "Landing-Page"}.html`, "text/html"); addToast("Downloaded animated landing page", "success");
+      if (chId === "html-video") {
+        const html = extractHtmlVideoDocument(text);
+        downloadFile(html, `${activeBrand?.company_name || "HTML-Video"}.html`, "text/html");
+        addToast("Downloaded HTML video file", "success");
+      }
+      else if (chId === "landing") {
+        const html = extractLandingPageDocument(text);
+        downloadFile(html, `${activeBrand?.company_name || "Landing-Page"}.html`, "text/html"); addToast("Downloaded landing page HTML", "success");
       } else {
         const hf = activeBrand?.typography?.heading_font || "system-ui";
         const bf = activeBrand?.typography?.body_font || "system-ui";
@@ -423,7 +453,7 @@ function GenerationCard({ bundle, channels, onUpdateBundle, onCopy, onRegenerate
           <span style={{ fontSize: 11, fontWeight: 700, color: "#52556B", textTransform: "uppercase", letterSpacing: "0.5px" }}>Text · {chData.textVariants.length} variant{chData.textVariants.length !== 1 ? "s" : ""}</span>
           <div style={{ display: "flex", gap: 4 }}>{chData.textVariants.map((tv, i) => (<button key={tv.id} onClick={() => selectText(i)} style={pill(chData.selectedTextIdx === i, ch?.color)}>{tv.label}</button>))}</div>
         </div>
-        <div style={{ padding: "14px 16px", borderRadius: 12, background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)", fontSize: 13, color: "#C4C6D0", lineHeight: 1.7, maxHeight: 200, overflowY: "auto", ...(!["blog","article","landing"].includes(activeChTab) ? { whiteSpace: "pre-wrap" } : {}) }}>{["blog","article","landing"].includes(activeChTab) ? <SimpleMarkdown text={currentText} /> : currentText}</div>
+        <div style={{ padding: "14px 16px", borderRadius: 12, background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)", fontSize: 13, color: "#C4C6D0", lineHeight: 1.7, maxHeight: 200, overflowY: "auto", ...(!["blog","article","landing","html-video"].includes(activeChTab) ? { whiteSpace: "pre-wrap" } : {}) }}>{activeChTab === "html-video" || activeChTab === "landing" ? <pre style={{ margin: 0, fontFamily: "'JetBrains Mono','Fira Code',monospace", fontSize: 10, whiteSpace: "pre-wrap", wordBreak: "break-all" }}>{currentText.length > 6000 ? `${currentText.slice(0, 6000)}…` : currentText}</pre> : ["blog","article"].includes(activeChTab) ? <SimpleMarkdown text={currentText} /> : currentText}</div>
         <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 8 }}>
           <button type="button" onClick={() => onCopy?.(currentText)} style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid rgba(255,255,255,0.06)", background: "rgba(255,255,255,0.02)", color: "#6B7084", fontSize: 11, fontWeight: 500, cursor: "pointer", fontFamily: "inherit", display: "inline-flex", alignItems: "center", gap: 5 }}><StudioLucide name="Copy" size={13} color="#6B7084" /> Copy</button>
           <button type="button" onClick={() => onRegenerate?.(activeChTab)} disabled={isGenerating} style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid rgba(255,255,255,0.06)", background: "rgba(255,255,255,0.02)", color: isGenerating ? "#3A3B44" : "#6B7084", fontSize: 11, fontWeight: 500, cursor: isGenerating ? "default" : "pointer", fontFamily: "inherit", display: "inline-flex", alignItems: "center", gap: 5 }}>{isGenerating ? <StudioLucide name="Loader2" size={13} color="#3A3B44" /> : <StudioLucide name="RefreshCw" size={13} color="#6B7084" />} Regen</button>
@@ -462,7 +492,7 @@ function GenerationCard({ bundle, channels, onUpdateBundle, onCopy, onRegenerate
 // ─── Left Panel ─────────────────────────────────────────────────────────
 function LeftPanel({ activeTab, setActiveTab, collapsed, brands, activeBrandId, onOpenBrandEditor, onSelectBrand, projects, onSelectProject, activeProjectId, onNewProject, onSelectTemplate, selectedTemplateId, width = 280 }) {
   const [search, setSearch] = useState(""); const [tplFilter, setTplFilter] = useState("All");
-  const cats = ["All", "Thought Leadership", "Product & Company", "Personal Brand", "Educational", "Landing Pages"];
+  const cats = ["All", "Thought Leadership", "Product & Company", "Personal Brand", "Educational", "Landing Pages", "Video"];
   const filtered = TEMPLATES.filter(t => (tplFilter === "All" || t.category === tplFilter) && (!search || t.name.toLowerCase().includes(search.toLowerCase())));
   if (collapsed) return null;
   return (<div style={{ width, minWidth: 200, height: "100%", background: "rgba(255,255,255,0.02)", borderRight: "none", display: "flex", flexDirection: "column", overflow: "hidden" }}>
@@ -485,16 +515,19 @@ function LeftPanel({ activeTab, setActiveTab, collapsed, brands, activeBrandId, 
 }
 
 // ─── Center Panel ───────────────────────────────────────────────────────
-function CenterPanel({ activeChannels, setActiveChannels, linkedinIncludeCarousel, setLinkedinIncludeCarousel, activeBrand, apiKeys, serverStatus, onSelectPreview, messages, setMessages, projectTitle, selectedTemplateId, setSelectedTemplateId, inputMode, setInputMode, tone, setTone, isGenerating, setIsGenerating, generationPhase, setGenerationPhase, addToast, onRegenerate, onGenerateImage, onOpenDesigner, designerPostSizeId, setDesignerPostSizeId, designerWhiteBg, setDesignerWhiteBg, designerThemeId, setDesignerThemeId, designerHideLogo = false }) {
+function CenterPanel({ activeChannels, setActiveChannels, setActiveChannel, linkedinIncludeCarousel, setLinkedinIncludeCarousel, activeBrand, apiKeys, serverStatus, onSelectPreview, messages, setMessages, projectTitle, selectedTemplateId, setSelectedTemplateId, inputMode, setInputMode, tone, setTone, isGenerating, setIsGenerating, generationPhase, setGenerationPhase, addToast, onRegenerate, onGenerateImage, onOpenDesigner, designerPostSizeId, setDesignerPostSizeId, designerWhiteBg, setDesignerWhiteBg, designerThemeId, setDesignerThemeId, designerHideLogo = false }) {
   const [inputValue, setInputValue] = useState("");
   const [uploadFile, setUploadFile] = useState(null);
   const [numText, setNumText] = useState(3); const [numVisual, setNumVisual] = useState(3); const [welcome, setWelcome] = useState(true);
   const ref = useRef(null); const endRef = useRef(null); const fileInputRef = useRef(null);
   const wasLandingOnlyRef = useRef(false);
   useEffect(() => {
-    const landingOnly = activeChannels.length === 1 && activeChannels[0] === "landing";
-    if (landingOnly && !wasLandingOnlyRef.current) setNumVisual(0);
-    wasLandingOnlyRef.current = landingOnly;
+    const landingOrVideoOnly =
+      activeChannels.length === 1 &&
+      (activeChannels[0] === "landing" || activeChannels[0] === "html-video");
+    if (landingOrVideoOnly && !wasLandingOnlyRef.current) setNumVisual(0);
+    if (landingOrVideoOnly) setNumText(1);
+    wasLandingOnlyRef.current = landingOrVideoOnly;
   }, [activeChannels]);
 
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages, isGenerating]);
@@ -687,10 +720,12 @@ function CenterPanel({ activeChannels, setActiveChannels, linkedinIncludeCarouse
                   checked={on}
                   onChange={(e) => {
                     e.stopPropagation();
+                    const checked = e.target.checked;
                     setActiveChannels((prev) => {
-                      if (e.target.checked) return prev.includes(ch.id) ? prev : [...prev, ch.id];
+                      if (checked) return prev.includes(ch.id) ? prev : [...prev, ch.id];
                       return prev.filter((id) => id !== ch.id);
                     });
+                    if (checked && setActiveChannel) setActiveChannel(ch.id);
                   }}
                   onClick={(e) => e.stopPropagation()}
                   onMouseDown={(e) => e.stopPropagation()}
@@ -860,12 +895,49 @@ function CenterPanel({ activeChannels, setActiveChannels, linkedinIncludeCarouse
 }
 
 // ─── Right Panel ────────────────────────────────────────────────────────
-function RightPanel({ activeChannels, setActiveChannels, activeChannel, setActiveChannel, collapsed, previewData, addToast, activeBrand, onTextEdit, onOpenDesigner, designerPostSizeId = "1080x1080-trns", designerWhiteBg = true, designerHideLogo = false, width = 380 }) {
+function RightPanel({ activeChannels, setActiveChannels, activeChannel, setActiveChannel, collapsed, previewData, addToast, activeBrand, onTextEdit, onOpenDesigner, designerPostSizeId = "1080x1080-trns", designerWhiteBg = true, designerHideLogo = false, width = 380, apiKeys = {}, tone = "Professional", selectedTemplateId = null }) {
   if (collapsed) return null;
-  const pd = previewData || {}; const text = pd.text || "Your generated content will appear here..."; const slots = pd.visualSlots || [];
+  const pd = previewData || {};
+  const text = pd.text != null && pd.text !== "" ? pd.text : "Your generated content will appear here...";
+  const slots = pd.visualSlots || [];
   const [editing, setEditing] = useState(false); const [editText, setEditText] = useState(text); const [versionIdx, setVersionIdx] = useState(0); const [versions, setVersions] = useState([{ text, time: "now" }]);
+  const [landingRevisePrompt, setLandingRevisePrompt] = useState("");
+  const [landingReviseBusy, setLandingReviseBusy] = useState(false);
+  const [htmlVideoOverlayOpen, setHtmlVideoOverlayOpen] = useState(false);
+  const [htmlVideoOverlayScale, setHtmlVideoOverlayScale] = useState(1);
+  const htmlVideoOverlayWrapRef = useRef(null);
 
   useEffect(() => { setEditText(text); setVersions([{ text, time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) }]); setVersionIdx(0); setEditing(false); }, [text]);
+
+  useEffect(() => {
+    if (activeChannel !== "html-video") setHtmlVideoOverlayOpen(false);
+  }, [activeChannel]);
+
+  useEffect(() => {
+    if (!htmlVideoOverlayOpen) return;
+    const onKey = (e) => {
+      if (e.key === "Escape") setHtmlVideoOverlayOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [htmlVideoOverlayOpen]);
+
+  useEffect(() => {
+    if (!htmlVideoOverlayOpen) return;
+    const el = htmlVideoOverlayWrapRef.current;
+    if (!el) return;
+    const update = () => {
+      const pad = 32;
+      const w = Math.max(0, el.clientWidth - pad);
+      const h = Math.max(0, el.clientHeight - pad);
+      const s = Math.min(w / 1280, h / 720, 1);
+      setHtmlVideoOverlayScale(s > 0 ? s : 1);
+    };
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [htmlVideoOverlayOpen]);
 
   const saveEdit = () => {
     const newVer = { text: editText, time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) };
@@ -874,6 +946,47 @@ function RightPanel({ activeChannels, setActiveChannels, activeChannel, setActiv
   };
   const revertTo = (idx) => { setVersionIdx(idx); setEditText(versions[idx].text); };
   const curText = versions[versionIdx]?.text || text;
+  const htmlVideoDoc = activeChannel === "html-video" ? extractHtmlVideoDocument(curText) : "";
+  const htmlVideoValid = /<!DOCTYPE\s+html/i.test(htmlVideoDoc) || /<html[\s>]/i.test(htmlVideoDoc);
+  const hasLandingSource =
+    activeChannel === "landing" &&
+    isFullLandingHtml(curText) &&
+    !/^Your generated content will appear here/i.test(curText.trim());
+  const runLandingRevise = async () => {
+    const instr = landingRevisePrompt.trim();
+    if (!hasLandingSource || !instr || landingReviseBusy) return;
+    setLandingReviseBusy(true);
+    try {
+      const result = await reviseLandingPage({
+        sectionsHtml: curText,
+        instructions: instr,
+        templateId: selectedTemplateId,
+        brand: activeBrand,
+        tone,
+        numVariants: 1,
+        apiKeys,
+      });
+      const newText = result.variants?.[0]?.text?.trim();
+      if (!newText) throw new Error("Empty response from model");
+      const time = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+      const newVer = { text: newText, time };
+      let newIndex = 0;
+      setVersions((prev) => {
+        newIndex = prev.length;
+        return [...prev, newVer];
+      });
+      setVersionIdx(newIndex);
+      setEditText(newText);
+      setLandingRevisePrompt("");
+      setEditing(false);
+      onTextEdit?.(newText);
+      addToast("Landing page updated from your instructions", "success");
+    } catch (err) {
+      addToast(err?.message || "Could not update landing page", "error");
+    } finally {
+      setLandingReviseBusy(false);
+    }
+  };
   const brandHFont = activeBrand?.typography?.heading_font;
   const brandBFont = activeBrand?.typography?.body_font;
 
@@ -910,7 +1023,129 @@ function RightPanel({ activeChannels, setActiveChannels, activeChannel, setActiv
     return <div key={i} style={{ marginTop: 12, height, borderRadius: 10, background: `linear-gradient(${135 + i * 20}deg,hsl(${sel?.hue || 250},35%,22%),hsl(${(sel?.hue || 250) + 40},45%,16%))`, display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", gap: 4 }}><span style={{ fontSize: 11, color: "rgba(255,255,255,0.4)", fontWeight: 600 }}>{s.slot}</span><span style={{ fontSize: 10, color: "rgba(255,255,255,0.3)" }}>v{previewIdx + 1} of {s.variants.length}{indices.length > 1 ? ` (+${indices.length - 1})` : ""}</span></div>;
   };
 
-  return (<div style={{ width, minWidth: 280, height: "100%", borderLeft: "none", display: "flex", flexDirection: "column", overflow: "hidden", background: "rgba(255,255,255,0.01)" }}>
+  const htmlVideoExpandedPortal =
+    typeof document !== "undefined" &&
+    htmlVideoOverlayOpen &&
+    activeChannel === "html-video" &&
+    htmlVideoValid &&
+    !editing
+      ? createPortal(
+          <div
+            style={{
+              position: "fixed",
+              inset: 0,
+              zIndex: 10000,
+              display: "flex",
+              justifyContent: "flex-end",
+              alignItems: "stretch",
+            }}
+          >
+            <button
+              type="button"
+              aria-label="Close expanded preview"
+              onClick={() => setHtmlVideoOverlayOpen(false)}
+              style={{
+                flex: 1,
+                minWidth: 40,
+                border: "none",
+                background: "rgba(0,0,0,0.5)",
+                cursor: "pointer",
+              }}
+            />
+            <div
+              style={{
+                width: "min(960px, 100vw)",
+                maxWidth: "100%",
+                height: "100%",
+                background: "#08090f",
+                borderLeft: "1px solid rgba(255,255,255,0.12)",
+                boxShadow: "-12px 0 48px rgba(0,0,0,0.55)",
+                display: "flex",
+                flexDirection: "column",
+              }}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  padding: "12px 16px",
+                  borderBottom: "1px solid rgba(255,255,255,0.08)",
+                  flexShrink: 0,
+                }}
+              >
+                <span style={{ fontSize: 14, fontWeight: 700, color: "#E2E4EA" }}>HTML video · expanded</span>
+                <button
+                  type="button"
+                  onClick={() => setHtmlVideoOverlayOpen(false)}
+                  style={{
+                    padding: "6px 12px",
+                    borderRadius: 8,
+                    border: "1px solid rgba(255,255,255,0.12)",
+                    background: "rgba(255,255,255,0.06)",
+                    color: "#C4B5FD",
+                    fontSize: 12,
+                    fontWeight: 600,
+                    cursor: "pointer",
+                    fontFamily: "inherit",
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 6,
+                  }}
+                >
+                  <StudioLucide name="X" size={14} color="#C4B5FD" />
+                  Close
+                </button>
+              </div>
+              <div
+                ref={htmlVideoOverlayWrapRef}
+                style={{
+                  flex: 1,
+                  minHeight: 0,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  padding: 16,
+                  overflow: "hidden",
+                }}
+              >
+                <div
+                  style={{
+                    width: 1280 * htmlVideoOverlayScale,
+                    height: 720 * htmlVideoOverlayScale,
+                    position: "relative",
+                    flexShrink: 0,
+                  }}
+                >
+                  <iframe
+                    srcDoc={htmlVideoDoc}
+                    sandbox="allow-scripts allow-same-origin"
+                    title="HTML Video expanded"
+                    style={{
+                      width: 1280,
+                      height: 720,
+                      border: "none",
+                      transform: `scale(${htmlVideoOverlayScale})`,
+                      transformOrigin: "top left",
+                      position: "absolute",
+                      top: 0,
+                      left: 0,
+                    }}
+                  />
+                </div>
+              </div>
+              <p style={{ margin: 0, padding: "10px 16px 14px", fontSize: 11, color: "#6B7084", borderTop: "1px solid rgba(255,255,255,0.06)" }}>
+                ← → Space · step scenes · <span style={{ fontFamily: "monospace", color: "#A855F7" }}>a</span> · resume autoplay · Esc closes
+              </p>
+            </div>
+          </div>,
+          document.body,
+        )
+      : null;
+
+  return (
+    <>
+      <div style={{ width, minWidth: 280, height: "100%", borderLeft: "none", display: "flex", flexDirection: "column", overflow: "hidden", background: "rgba(255,255,255,0.01)" }}>
     <div style={{ display: "flex", padding: "8px 12px", gap: 6, borderBottom: "1px solid rgba(255,255,255,0.06)", overflowX: "auto", alignItems: "center" }}>
       {CHANNELS.filter((c) => activeChannels.includes(c.id)).map((ch) => (
         <div
@@ -987,14 +1222,134 @@ function RightPanel({ activeChannels, setActiveChannels, activeChannel, setActiv
             <h2 style={{ fontSize: 16, fontWeight: 700, color: "#E2E4EA", margin: 0, ...(brandHFont ? { fontFamily: `'${brandHFont}', sans-serif` } : {}) }}>Landing Page Preview</h2>
             <div style={{ display: "flex", gap: 6 }}>
               <button onClick={() => setEditing(!editing)} style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid rgba(255,255,255,0.08)", background: editing ? "rgba(236,72,153,0.15)" : "rgba(255,255,255,0.03)", color: editing ? "#EC4899" : "#8B8DA3", fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>{editing ? "Preview" : "Edit Source"}</button>
-              <button onClick={() => { const html = buildLandingPageHtml(curText, activeBrand, landingExportOptions()); const blob = new Blob([html], { type: "text/html" }); const url = URL.createObjectURL(blob); window.open(url, "_blank"); setTimeout(() => URL.revokeObjectURL(url), 60000); }} style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid rgba(236,72,153,0.3)", background: "rgba(236,72,153,0.1)", color: "#EC4899", fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>Open Full</button>
+              <button onClick={() => { const html = extractLandingPageDocument(curText); const blob = new Blob([html], { type: "text/html" }); const url = URL.createObjectURL(blob); window.open(url, "_blank"); setTimeout(() => URL.revokeObjectURL(url), 60000); }} style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid rgba(236,72,153,0.3)", background: "rgba(236,72,153,0.1)", color: "#EC4899", fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>Open Full</button>
             </div>
           </div>
+          {hasLandingSource && (
+            <div style={{ marginBottom: 12, padding: 12, borderRadius: 10, border: "1px solid rgba(236,72,153,0.2)", background: "rgba(236,72,153,0.04)" }}>
+              <div style={{ fontSize: 11, fontWeight: 600, color: "#F9A8D4", marginBottom: 8, display: "flex", alignItems: "center", gap: 6 }}>
+                <StudioLucide name="Sparkles" size={14} color="#F9A8D4" />
+                Edit with AI
+              </div>
+              <p style={{ margin: "0 0 8px", fontSize: 11, color: "#8B8DA3", lineHeight: 1.5 }}>
+                Describe what to change — e.g. shorten the hero headline, add a FAQ about pricing, or change the primary CTA label. The model updates your sections and leaves unrelated parts as unchanged as possible.
+              </p>
+              <textarea
+                value={landingRevisePrompt}
+                onChange={(e) => setLandingRevisePrompt(e.target.value)}
+                placeholder="What should change on this landing page?"
+                disabled={landingReviseBusy}
+                rows={3}
+                style={{
+                  width: "100%",
+                  padding: 10,
+                  borderRadius: 8,
+                  border: "1px solid rgba(255,255,255,0.1)",
+                  background: "rgba(0,0,0,0.25)",
+                  color: "#E2E4EA",
+                  fontSize: 12,
+                  fontFamily: "'DM Sans', sans-serif",
+                  lineHeight: 1.5,
+                  outline: "none",
+                  resize: "vertical",
+                  boxSizing: "border-box",
+                  marginBottom: 8,
+                  opacity: landingReviseBusy ? 0.6 : 1,
+                }}
+              />
+              <button
+                type="button"
+                onClick={() => runLandingRevise()}
+                disabled={landingReviseBusy || !landingRevisePrompt.trim()}
+                style={{
+                  padding: "8px 14px",
+                  borderRadius: 8,
+                  border: "none",
+                  background:
+                    landingReviseBusy || !landingRevisePrompt.trim()
+                      ? "rgba(255,255,255,0.08)"
+                      : "linear-gradient(135deg,#EC4899,#6C2BD9)",
+                  color: landingReviseBusy || !landingRevisePrompt.trim() ? "#52556B" : "white",
+                  fontSize: 12,
+                  fontWeight: 600,
+                  cursor: landingReviseBusy || !landingRevisePrompt.trim() ? "default" : "pointer",
+                  fontFamily: "inherit",
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 6,
+                }}
+              >
+                {landingReviseBusy ? (
+                  <>
+                    <LoadingDots text="Updating" />
+                  </>
+                ) : (
+                  <>
+                    <StudioLucide name="PenLine" size={14} color="white" />
+                    Apply changes
+                  </>
+                )}
+              </button>
+            </div>
+          )}
           {editing ? <textarea value={editText} onChange={e => setEditText(e.target.value)} style={{ width: "100%", minHeight: 300, padding: 12, borderRadius: 10, border: "1px solid rgba(236,72,153,0.3)", background: "rgba(236,72,153,0.03)", color: "#E2E4EA", fontSize: 12, fontFamily: "'JetBrains Mono', 'Fira Code', monospace", lineHeight: 1.6, outline: "none", resize: "vertical", boxSizing: "border-box", tabSize: 2 }} /> :
           <div style={{ borderRadius: 10, overflow: "auto", border: "1px solid rgba(255,255,255,0.08)", background: "#0C0D14", height: 600, position: "relative" }}>
-            <iframe srcDoc={buildLandingPageHtml(curText, activeBrand, landingExportOptions())} style={{ width: "200%", height: 3000, border: "none", transform: "scale(0.5)", transformOrigin: "top left", display: "block", pointerEvents: "auto" }} title="Landing Page Preview" />
+            <iframe
+              srcDoc={
+                hasLandingSource
+                  ? extractLandingPageDocument(curText)
+                  : "<!DOCTYPE html><html><head><meta charset='utf-8'><style>body{font-family:system-ui;margin:40px;color:#888;background:#0C0D14}</style></head><body><p>Generate a landing page to preview. The model returns a full HTML document.</p></body></html>"
+              }
+              sandbox="allow-scripts allow-same-origin"
+              style={{ width: "200%", height: 3000, border: "none", transform: "scale(0.5)", transformOrigin: "top left", display: "block", pointerEvents: "auto" }}
+              title="Landing Page Preview"
+            />
           </div>}
           {editing && <div style={{ display: "flex", gap: 6, marginTop: 8 }}><button onClick={saveEdit} style={{ padding: "6px 14px", borderRadius: 7, border: "none", background: "linear-gradient(135deg,#EC4899,#6C2BD9)", color: "white", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>Save Changes</button><button onClick={() => { setEditing(false); setEditText(versions[versionIdx].text); }} style={{ padding: "6px 14px", borderRadius: 7, border: "1px solid rgba(255,255,255,0.08)", background: "transparent", color: "#8B8DA3", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>Cancel</button></div>}
+        </div>}
+        {activeChannel === "html-video" && <div style={{ padding: 16 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+            <h2 style={{ fontSize: 16, fontWeight: 700, color: "#E2E4EA", margin: 0, ...(brandHFont ? { fontFamily: `'${brandHFont}', sans-serif` } : {}) }}>HTML Video Preview</h2>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "flex-end" }}>
+              <button type="button" onClick={() => setEditing(!editing)} style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid rgba(255,255,255,0.08)", background: editing ? "rgba(168,85,247,0.2)" : "rgba(255,255,255,0.03)", color: editing ? "#C4B5FD" : "#8B8DA3", fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>{editing ? "Preview" : "Edit Source"}</button>
+              <button
+                type="button"
+                disabled={!htmlVideoValid || editing}
+                onClick={() => setHtmlVideoOverlayOpen(true)}
+                title={!htmlVideoValid ? "Generate or paste HTML first" : "Open wide preview on the right"}
+                style={{
+                  padding: "4px 10px",
+                  borderRadius: 6,
+                  border: "1px solid rgba(168,85,247,0.35)",
+                  background: !htmlVideoValid || editing ? "rgba(255,255,255,0.04)" : "rgba(168,85,247,0.12)",
+                  color: !htmlVideoValid || editing ? "#52556B" : "#C4B5FD",
+                  fontSize: 11,
+                  fontWeight: 600,
+                  cursor: !htmlVideoValid || editing ? "default" : "pointer",
+                  fontFamily: "inherit",
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 4,
+                }}
+              >
+                <StudioLucide name="Maximize2" size={12} color={!htmlVideoValid || editing ? "#52556B" : "#C4B5FD"} />
+                Expand
+              </button>
+              <button type="button" onClick={() => { const html = extractHtmlVideoDocument(curText); const blob = new Blob([html], { type: "text/html" }); const url = URL.createObjectURL(blob); window.open(url, "_blank"); setTimeout(() => URL.revokeObjectURL(url), 60000); }} style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid rgba(168,85,247,0.35)", background: "rgba(168,85,247,0.12)", color: "#C4B5FD", fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>Open Full</button>
+            </div>
+          </div>
+          <p style={{ margin: "0 0 12px", fontSize: 11, color: "#8B8DA3", lineHeight: 1.55 }}>1280×720 scene sequencer — in the preview use arrow keys or Space to step scenes, <span style={{ fontFamily: "monospace", color: "#A855F7" }}>a</span> to resume autoplay.</p>
+          {!editing && !htmlVideoValid && (
+            <div style={{ marginBottom: 12, padding: "10px 12px", borderRadius: 8, background: "rgba(168,85,247,0.08)", border: "1px solid rgba(168,85,247,0.25)", fontSize: 11, color: "#C4B5FD", lineHeight: 1.5 }}>
+              No HTML video document yet for this project. Include <strong style={{ fontWeight: 600 }}>HTML Video</strong> in your channel list and run <strong style={{ fontWeight: 600 }}>Generate</strong>, or use <strong style={{ fontWeight: 600 }}>Edit Source</strong> to paste a full HTML file.
+            </div>
+          )}
+          {editing ? <textarea value={editText} onChange={(e) => setEditText(e.target.value)} style={{ width: "100%", minHeight: 300, padding: 12, borderRadius: 10, border: "1px solid rgba(168,85,247,0.35)", background: "rgba(168,85,247,0.06)", color: "#E2E4EA", fontSize: 12, fontFamily: "'JetBrains Mono', 'Fira Code', monospace", lineHeight: 1.6, outline: "none", resize: "vertical", boxSizing: "border-box", tabSize: 2 }} /> : (
+            <div style={{ borderRadius: 10, overflow: "auto", border: "1px solid rgba(255,255,255,0.08)", background: "#000", height: 600, position: "relative" }}>
+              <iframe srcDoc={htmlVideoDoc} sandbox="allow-scripts allow-same-origin" style={{ width: "200%", height: 2200, border: "none", transform: "scale(0.5)", transformOrigin: "top left", display: "block", pointerEvents: "auto" }} title="HTML Video Preview" />
+            </div>
+          )}
+          {editing && <div style={{ display: "flex", gap: 6, marginTop: 8 }}><button type="button" onClick={saveEdit} style={{ padding: "6px 14px", borderRadius: 7, border: "none", background: "linear-gradient(135deg,#A855F7,#6C2BD9)", color: "white", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>Save Changes</button><button type="button" onClick={() => { setEditing(false); setEditText(versions[versionIdx].text); }} style={{ padding: "6px 14px", borderRadius: 7, border: "1px solid rgba(255,255,255,0.08)", background: "transparent", color: "#8B8DA3", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>Cancel</button></div>}
         </div>}
         {["blog", "article"].includes(activeChannel) && <div style={{ padding: 24 }}>
           <h2 style={{ fontSize: 20, fontWeight: 700, color: "#E2E4EA", margin: "0 0 8px", ...(brandHFont ? { fontFamily: `'${brandHFont}', sans-serif` } : {}) }}>{activeChannel === "blog" ? "Blog Post" : "Article"}</h2>
@@ -1011,7 +1366,7 @@ function RightPanel({ activeChannels, setActiveChannels, activeChannel, setActiv
           <button type="button" onClick={() => setEditing(true)} style={{ padding: "6px 12px", borderRadius: 7, border: "1px solid rgba(255,255,255,0.06)", background: "rgba(255,255,255,0.03)", color: "#8B8DA3", fontSize: 12, fontWeight: 500, cursor: "pointer", fontFamily: "inherit", display: "inline-flex", alignItems: "center", gap: 6 }}><StudioLucide name="Pencil" size={14} color="#8B8DA3" /> Edit</button>
           {slots.some((s) => getVisualSelectedIndices(s).some((ix) => s.variants?.[ix]?.url)) && <button type="button" onClick={() => { for (const s of slots) { const idxs = getVisualSelectedIndices(s); const hit = idxs.find((ix) => s.variants?.[ix]?.url); if (hit != null) { const v = s.variants[hit]; onOpenDesigner?.(v.url, v.designerContent, slots); break; } } }} style={{ padding: "6px 12px", borderRadius: 7, border: "1px solid rgba(108,43,217,0.35)", background: "rgba(108,43,217,0.08)", color: "#C4B5FD", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", display: "inline-flex", alignItems: "center", gap: 6 }}><StudioLucide name="Palette" size={14} color="#C4B5FD" /> Visual designer</button>}
           <button type="button" onClick={() => { clipCopy(curText).then(ok => addToast(ok ? "Copied!" : "Copy failed", ok ? "success" : "error")); }} style={{ padding: "6px 12px", borderRadius: 7, border: "1px solid rgba(255,255,255,0.06)", background: "rgba(255,255,255,0.03)", color: "#8B8DA3", fontSize: 12, fontWeight: 500, cursor: "pointer", fontFamily: "inherit", display: "inline-flex", alignItems: "center", gap: 6 }}><StudioLucide name="Copy" size={14} color="#8B8DA3" /> Copy</button>
-          <button type="button" onClick={() => { downloadFile(curText, `${activeChannel}-content.md`, "text/markdown"); addToast("Downloaded!", "success"); }} style={{ padding: "6px 12px", borderRadius: 7, border: "1px solid rgba(255,255,255,0.06)", background: "rgba(255,255,255,0.03)", color: "#8B8DA3", fontSize: 12, fontWeight: 500, cursor: "pointer", fontFamily: "inherit", display: "inline-flex", alignItems: "center", gap: 6 }}><StudioLucide name="Download" size={14} color="#8B8DA3" /> Download</button>
+          <button type="button" onClick={() => { if (activeChannel === "html-video") { downloadFile(extractHtmlVideoDocument(curText), `${activeBrand?.company_name || "HTML-Video"}.html`, "text/html"); addToast("Downloaded HTML video", "success"); } else if (activeChannel === "landing") { downloadFile(extractLandingPageDocument(curText), `${activeBrand?.company_name || "Landing-Page"}.html`, "text/html"); addToast("Downloaded landing HTML", "success"); } else { downloadFile(curText, `${activeChannel}-content.md`, "text/markdown"); addToast("Downloaded!", "success"); } }} style={{ padding: "6px 12px", borderRadius: 7, border: "1px solid rgba(255,255,255,0.06)", background: "rgba(255,255,255,0.03)", color: "#8B8DA3", fontSize: 12, fontWeight: 500, cursor: "pointer", fontFamily: "inherit", display: "inline-flex", alignItems: "center", gap: 6 }}><StudioLucide name="Download" size={14} color="#8B8DA3" /> {activeChannel === "html-video" || activeChannel === "landing" ? "Download .html" : "Download"}</button>
         </div>
       </div>
 
@@ -1028,7 +1383,10 @@ function RightPanel({ activeChannels, setActiveChannels, activeChannel, setActiv
         {versions.length > 1 ? <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>{versions.map((v, i) => (<div key={i} onClick={() => revertTo(i)} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", borderRadius: 8, cursor: "pointer", background: versionIdx === i ? "rgba(108,43,217,0.1)" : "transparent", border: versionIdx === i ? "1px solid rgba(108,43,217,0.2)" : "1px solid transparent" }} onMouseEnter={e => { if (versionIdx !== i) e.currentTarget.style.background = "rgba(255,255,255,0.04)"; }} onMouseLeave={e => { if (versionIdx !== i) e.currentTarget.style.background = "transparent"; }}><div style={{ width: 8, height: 8, borderRadius: "50%", background: versionIdx === i ? "#6C2BD9" : "rgba(255,255,255,0.15)" }} /><span style={{ fontSize: 12, color: versionIdx === i ? "#C4B5FD" : "#6B7084", fontWeight: versionIdx === i ? 600 : 400 }}>v{i + 1}</span><span style={{ fontSize: 11, color: "#52556B", marginLeft: "auto" }}>{v.time}</span></div>))}</div> : <div style={{ display: "flex", alignItems: "center", gap: 8 }}><div style={{ flex: 1, height: 4, borderRadius: 2, background: "rgba(255,255,255,0.06)", position: "relative" }}><div style={{ width: 12, height: 12, borderRadius: "50%", background: "#6C2BD9", position: "absolute", top: -4, left: "0%", border: "2px solid #1A1B23" }} /></div><span style={{ fontSize: 11, color: "#52556B", whiteSpace: "nowrap" }}>v1 of 1</span></div>}
       </div>
     </div>
-  </div>);
+  </div>
+  {htmlVideoExpandedPortal}
+  </>
+  );
 }
 
 // ─── Main Workspace ─────────────────────────────────────────────────────
@@ -1212,7 +1570,9 @@ export default function Workspace({ user, onLogout }) {
     setSelectedTemplateId(template.id);
     setInputMode(template.defaultMode || "text");
     setTone(template.defaultTone || "Professional");
-    setActiveChannels(template.channels || ["linkedin"]);
+    const chans = template.channels || ["linkedin"];
+    setActiveChannels(chans);
+    if (chans[0]) setActiveChannel(chans[0]);
     addToast(`Template: ${template.name}`, "info");
   };
 
@@ -1301,6 +1661,9 @@ export default function Workspace({ user, onLogout }) {
     const chData = lastAi.bundle[ch];
     if (chData) {
       setPreviewData({ channel: ch, text: chData.textVariants?.[chData.selectedTextIdx]?.text, visualSlots: chData.visualSlots });
+    } else {
+      /* Avoid showing another channel’s text when this tab has no bundle yet (e.g. HTML Video just enabled). */
+      setPreviewData({ channel: ch, text: null, visualSlots: [] });
     }
   }, [currentMessages, activeChannel]);
 
@@ -1332,7 +1695,18 @@ export default function Workspace({ user, onLogout }) {
     setIsGenerating(true); setGenerationPhase("text");
     try {
       const sourceText = userMsg.preparedInput || userMsg.content;
-      const result = await generateText({ input: sourceText, channel: channelId, templateId: userMsg.templateId || selectedTemplateId, brand: activeBrand, numVariants: userMsg.numText || 3, tone: userMsg.tone || tone, apiKeys });
+      const requestedNv = userMsg.numText || 3;
+      const numVariants =
+        channelId === "landing" || channelId === "html-video" ? 1 : requestedNv;
+      const result = await generateText({
+        input: sourceText,
+        channel: channelId,
+        templateId: userMsg.templateId || selectedTemplateId,
+        brand: activeBrand,
+        numVariants,
+        tone: userMsg.tone || tone,
+        apiKeys,
+      });
       setCurrentMessages(p => p.map(m => { if (m.id !== messageId) return m; const bundle = { ...m.bundle }; bundle[channelId] = { ...bundle[channelId], textVariants: result.variants, selectedTextIdx: 0 }; return { ...m, bundle }; }));
       addToast(`Regenerated ${CHANNELS.find(c => c.id === channelId)?.label || channelId}`, "success");
     } catch (error) { addToast(`Regen failed: ${error.message}`, "error"); }
@@ -1489,7 +1863,7 @@ export default function Workspace({ user, onLogout }) {
   const handlePreviewTextEdit = (newText) => {
     const lastAi = [...currentMessages].reverse().find(m => m.role === "assistant");
     if (!lastAi?.bundle) return;
-    const ch = previewData?.channel || activeChannels[0];
+    const ch = activeChannel;
     if (!lastAi.bundle[ch]) return;
     setCurrentMessages(p => p.map(m => {
       if (m.id !== lastAi.id) return m;
@@ -1525,9 +1899,9 @@ export default function Workspace({ user, onLogout }) {
     <div style={{ flex: 1, display: "flex", overflow: "hidden" }}>
       <LeftPanel activeTab={leftTab} setActiveTab={setLeftTab} collapsed={leftCollapsed} brands={brands} activeBrandId={activeBrandId} onOpenBrandEditor={openBrandEditor} onSelectBrand={setActiveBrandId} projects={projects} onSelectProject={selectProject} activeProjectId={activeProjectId} onNewProject={newProject} onSelectTemplate={selectTemplate} selectedTemplateId={selectedTemplateId} width={leftWidth} />
       {!leftCollapsed && <PanelDivider onDrag={(dx) => setLeftWidth(w => Math.max(200, Math.min(500, w + dx)))} />}
-      <CenterPanel activeChannels={activeChannels} setActiveChannels={setActiveChannels} linkedinIncludeCarousel={linkedinIncludeCarousel} setLinkedinIncludeCarousel={setLinkedinIncludeCarousel} activeBrand={activeBrand} apiKeys={apiKeys} serverStatus={serverStatus} onSelectPreview={setPreviewData} messages={currentMessages} setMessages={setCurrentMessages} projectTitle={projectTitle} selectedTemplateId={selectedTemplateId} setSelectedTemplateId={setSelectedTemplateId} inputMode={inputMode} setInputMode={setInputMode} tone={tone} setTone={setTone} isGenerating={isGenerating} setIsGenerating={setIsGenerating} generationPhase={generationPhase} setGenerationPhase={setGenerationPhase} addToast={addToast} onRegenerate={regenerateChannel} onGenerateImage={generateAllImages} onOpenDesigner={openDesignerWithImage} designerPostSizeId={designerPostSizeId} setDesignerPostSizeId={setDesignerPostSizeId} designerWhiteBg={designerWhiteBg} setDesignerWhiteBg={setDesignerWhiteBg} designerThemeId={designerThemeId} setDesignerThemeId={setDesignerThemeId} designerHideLogo={designerHideLogo} />
+      <CenterPanel activeChannels={activeChannels} setActiveChannels={setActiveChannels} setActiveChannel={setActiveChannel} linkedinIncludeCarousel={linkedinIncludeCarousel} setLinkedinIncludeCarousel={setLinkedinIncludeCarousel} activeBrand={activeBrand} apiKeys={apiKeys} serverStatus={serverStatus} onSelectPreview={setPreviewData} messages={currentMessages} setMessages={setCurrentMessages} projectTitle={projectTitle} selectedTemplateId={selectedTemplateId} setSelectedTemplateId={setSelectedTemplateId} inputMode={inputMode} setInputMode={setInputMode} tone={tone} setTone={setTone} isGenerating={isGenerating} setIsGenerating={setIsGenerating} generationPhase={generationPhase} setGenerationPhase={setGenerationPhase} addToast={addToast} onRegenerate={regenerateChannel} onGenerateImage={generateAllImages} onOpenDesigner={openDesignerWithImage} designerPostSizeId={designerPostSizeId} setDesignerPostSizeId={setDesignerPostSizeId} designerWhiteBg={designerWhiteBg} setDesignerWhiteBg={setDesignerWhiteBg} designerThemeId={designerThemeId} setDesignerThemeId={setDesignerThemeId} designerHideLogo={designerHideLogo} />
       {!rightCollapsed && <PanelDivider onDrag={(dx) => setRightWidth(w => Math.max(280, Math.min(600, w - dx)))} />}
-      <RightPanel activeChannels={activeChannels} setActiveChannels={setActiveChannels} activeChannel={activeChannel} setActiveChannel={setActiveChannel} collapsed={rightCollapsed} previewData={previewData} addToast={addToast} activeBrand={activeBrand} onTextEdit={handlePreviewTextEdit} onOpenDesigner={openDesignerWithImage} designerPostSizeId={designerPostSizeId} designerWhiteBg={designerWhiteBg} designerHideLogo={designerHideLogo} width={rightWidth} />
+      <RightPanel activeChannels={activeChannels} setActiveChannels={setActiveChannels} activeChannel={activeChannel} setActiveChannel={setActiveChannel} collapsed={rightCollapsed} previewData={previewData} addToast={addToast} activeBrand={activeBrand} onTextEdit={handlePreviewTextEdit} onOpenDesigner={openDesignerWithImage} designerPostSizeId={designerPostSizeId} designerWhiteBg={designerWhiteBg} designerHideLogo={designerHideLogo} width={rightWidth} apiKeys={apiKeys} tone={tone} selectedTemplateId={selectedTemplateId} />
     </div>
 
     <ApiKeysModal open={showApiKeys} onClose={() => setShowApiKeys(false)} apiKeys={apiKeys} setApiKeys={setApiKeys} serverStatus={serverStatus} addToast={addToast} />

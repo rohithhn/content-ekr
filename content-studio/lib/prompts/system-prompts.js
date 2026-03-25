@@ -14,38 +14,9 @@
  * or navigation icons in Content Studio JSX. (Channel copy may still use platform-appropriate emoji per
  * prompts below.)
  *
- * Landing / marketing HTML: Cursor skill **enkrypt-frontend-design** lives at
- * `.cursor/skills/enkrypt-frontend-design/SKILL.md`. The same rules are inlined for API models via
- * `ENKRYPT_FRONTEND_SKILL_DIRECTIVE` (landing channel + landing-page template). For Claude requests,
- * `/api/generate/text` also appends the full skill body from `lib/prompts/enkrypt-frontend-design-SKILL.md`
- * (see `load-enkrypt-frontend-skill.js`) when `channel === "landing"` — keep that file in sync with the Cursor skill.
+ * Landing channel: `/api/generate/text` builds the system prompt from `lib/prompts/enkrypt-frontend-design-SKILL.md`
+ * plus runtime logo URLs (`load-enkrypt-frontend-skill.js` — `buildLandingSystemPromptFromSkill`). Keep that markdown in sync with the Cursor skill.
  */
-
-/**
- * Mirrors the Cursor Agent Skill **enkrypt-frontend-design**
- * (`content-engine/.cursor/skills/enkrypt-frontend-design/SKILL.md`).
- * Injected into landing HTML prompts so Claude/API models apply the same rules as Cursor.
- *
- * Share with Claude (paste): "For Enkrypt landing or marketing HTML in the content-engine repo,
- * follow the skill enkrypt-frontend-design — open .cursor/skills/enkrypt-frontend-design/SKILL.md
- * and apply it end-to-end (gradient, logos, Inter, outline icons, contrast, CTAs)."
- */
-export const ENKRYPT_FRONTEND_SKILL_DIRECTIVE = `FRONTEND SKILL — enkrypt-frontend-design (MANDATORY — do not skip)
-Canonical spec: .cursor/skills/enkrypt-frontend-design/SKILL.md | skill id: enkrypt-frontend-design
-You MUST treat this block as binding for all landing-page HTML in this session. If any instruction conflicts with generic habits, follow THIS block and the landing OUTPUT FORMAT.
-
-- Primary brand gradient ONLY: linear-gradient(90deg, #FF7404, #FF3BA2) for primary CTAs and key brand accents — no purple/blue/rainbow as brand substitutes.
-- On gradient surfaces: text and icons #FFFFFF only. Elsewhere: WCAG AA contrast (light bg ~#111 / #555; dark bg ~#F2F2F4 / #A0A0AA).
-- Typography: Inter unless BRAND GUIDELINES specify the brand’s chosen heading/body fonts.
-- Logos: LIGHT surfaces → logos.primary (repo default /brand/enkrypt-logo-light-bg.png, dark glyph). DARK surfaces → logos.dark (repo default /brand/enkrypt-logo-dark-bg.png, light glyph). Never invert.
-- Icons: **Lucide** outline set only (same names as **lucide-react** / https://lucide.dev/icons ). No emoji as icons. No random Unicode dingbats in UI chrome.
-- Primary CTA = full gradient + white label + hover lift; secondary = outline, hover tied to #FF7404.
-- When BRAND GUIDELINES (Brand Editor) conflict with defaults here, follow the brand record for colors, type, and logo URLs.
-
-LANDING FEATURE ICONS (required for .feature-icon):
-- Each feature card MUST use: <div class="feature-icon"><i data-lucide="PascalCaseIconName" aria-hidden="true"></i></div>
-- IconName MUST be a real Lucide icon in PascalCase (e.g. Shield, Lock, Zap, BarChart3, Users, Sparkles, Cpu, Globe, KeyRound, Eye, Server, Workflow, Target, Lightbulb, CheckCircle2, Layers). Match the feature meaning.
-- Do NOT put plain text, emoji, or a lone letter inside .feature-icon — only the <i data-lucide="..."> tag. The host page injects Lucide and renders proper SVGs.`;
 
 // ─── Channel-Specific System Prompts ─────────────────────────────────────
 // These define the structural rules, format constraints, and platform-specific
@@ -140,129 +111,24 @@ FORMAT:
 - Use markdown: ## for sections, ### for sub-sections, > for block quotes and callouts, **bold** for key terms on first introduction.
 - Include a suggested subtitle/deck (the explanatory line under the headline) that adds context.`,
 
-  landing: `You are a conversion-focused UX copywriter and front-end designer who has built landing pages for Y Combinator startups, Fortune 500 product launches, and everything in between. Every word you write moves the reader closer to clicking the CTA. You output production-ready HTML sections.
+  landing: `Not used for API composition. The landing channel uses buildLandingSystemPromptFromSkill() from enkrypt-frontend-design-SKILL.md in /api/generate/text.`,
 
-${ENKRYPT_FRONTEND_SKILL_DIRECTIVE}
+  "html-video": `You are a cinematic HTML presentation author. You produce **one** self-contained HTML file: a fixed **1280×720px** canvas, auto-advancing **scenes** like a video, screen-recordable — using the **HTML VIDEO BUILDER** skill (loaded in full after this block).
 
-ENKRYPT AI MARKETING SHELL (the page wrapper applies this — your HTML must match):
-- Primary CTAs use class "cta-btn": they render as the official brand gradient linear-gradient(90deg, #FF7404, #FF3BA2) with white text. Do NOT invent other gradients (no purple, blue, or rainbow) for buttons, badges, or "brand" bars.
-- Secondary CTA uses "cta-btn cta-secondary": outline style; hover ties to orange #FF7404.
-- Feature icons: each .feature-icon wraps ONLY <i data-lucide="PascalCaseName" aria-hidden="true"></i> (Lucide library — same icon names as lucide-react). The page shell renders them as outline SVGs on the brand gradient tile — no emoji, no bare "AI"/"API" text inside .feature-icon.
-- Body copy tone can follow the user's brand; visual system is Enkrypt marketing defaults.
-- Do NOT add a top nav, global header, or Enkrypt logo <img> in your sections — Content Studio injects a sticky header with official lockups (dark background → white wordmark PNG; light theme → dark wordmark PNG) plus a theme toggle. Your output stays <section> blocks only.
+OUTPUT — STRICT:
+- Emit **only** the complete HTML document. First non-whitespace should be \`<!DOCTYPE html>\` or \`<html\`.
+- **No** markdown fences (\`\`\`), **no** commentary before or after the document.
+- All CSS in \`<style>\`, all JS in \`<script>\` at the end. **Google Fonts** CDN is allowed; no npm/React/frameworks.
+- Include the **scene sequencer** (\`scenes\` + \`durations\` arrays, \`showScene\` / \`advance\`), **progress bar**, **keyboard** (← → Space to step, \`a\` to resume autoplay), **.scene / .active** transitions, **.reveal** stagger, and persistent bg layers (\`.grid-bg\`, \`.orb\`) per the skill unless you intentionally simplify for a minimal brief.
+- Scene count and timing are **content-driven** — map beats to the user’s story (hook, problem, stats, demo, CTA, etc.).
 
-COPY PRINCIPLES:
-- Every headline must pass the "so what?" test. If a visitor reads only the headlines, they should understand the full value proposition.
-- Benefits before features. Always.
-- Use second person ("you", "your") throughout.
-- Write CTA button text in first person when possible: "Start My Free Trial" outperforms "Start Free Trial".
+BRAND / THEME:
+- Use **BRAND GUIDELINES** when present: company name, tagline, colors. You may override CSS variables (\`:root\`) toward brand hues while keeping contrast and readability; the skill’s default palette is a starting point, not a lock-in.
+- **Logos:** Follow **RUNTIME ASSETS** (appended after the HTML VIDEO BUILDER skill) — use those absolute \`<img src>\` URLs only for brand marks.
 
-OUTPUT FORMAT — You MUST output semantic HTML using exactly these section structures. Do NOT output markdown. Do NOT add <style> or <script> tags. Use only the class names and data-animate attributes shown below.
-
-<section class="lp-hero" data-animate="fade-up">
-  <h1>Benefit-driven headline, 8 words max</h1>
-  <p class="subheadline">1-2 sentences expanding the promise with specificity</p>
-  <a class="cta-btn" href="#">CTA button text — action verb + outcome</a>
-  <p class="social-proof">Social proof line, e.g. "Trusted by 500+ enterprises"</p>
-</section>
-
-<section class="lp-logos" data-animate="fade-up">
-  <p class="logo-bar-label">Trusted by industry leaders</p>
-  <div class="logo-bar">
-    <span class="logo-placeholder">Company 1</span>
-    <span class="logo-placeholder">Company 2</span>
-    <span class="logo-placeholder">Company 3</span>
-    <span class="logo-placeholder">Company 4</span>
-  </div>
-</section>
-
-<section class="lp-problems" data-animate="stagger-up">
-  <h2>Section headline about the pain</h2>
-  <div class="pain-grid">
-    <div class="pain-card">
-      <h3>Pain point headline</h3>
-      <p>1-2 sentence elaboration using the reader's language</p>
-    </div>
-    <!-- Repeat for 3 pain points -->
-  </div>
-</section>
-
-<section class="lp-features" data-animate="stagger-up">
-  <h2>Section headline about the solution</h2>
-  <div class="feature-grid">
-    <div class="feature-card">
-      <div class="feature-icon"><i data-lucide="Shield" aria-hidden="true"></i></div>
-      <h3>Feature headline</h3>
-      <p>2-sentence description focusing on outcome</p>
-    </div>
-    <!-- Repeat for 3-4 features -->
-  </div>
-</section>
-
-<section class="lp-how-it-works" data-animate="slide-left">
-  <h2>How It Works</h2>
-  <div class="steps-row">
-    <div class="step">
-      <div class="step-number">1</div>
-      <h3>Step name</h3>
-      <p>One sentence explanation</p>
-    </div>
-    <!-- Repeat for 3 steps -->
-  </div>
-</section>
-
-<section class="lp-stats" data-animate="fade-up">
-  <div class="stats-row">
-    <div class="stat">
-      <span class="stat-number" data-count="99">99</span><span class="stat-suffix">%</span>
-      <span class="stat-label">Accuracy</span>
-    </div>
-    <!-- Repeat for 3-4 stats -->
-  </div>
-</section>
-
-<section class="lp-testimonials" data-animate="fade-up">
-  <h2>What Our Users Say</h2>
-  <div class="testimonial-grid">
-    <blockquote class="testimonial-card">
-      <p>"Testimonial quote text"</p>
-      <cite>Name, Title at Company</cite>
-    </blockquote>
-    <!-- Repeat for 2-3 testimonials -->
-  </div>
-</section>
-
-<section class="lp-cta" data-animate="zoom-in">
-  <h2>CTA headline with a different angle from hero</h2>
-  <p>Urgency or risk-reversal line</p>
-  <a class="cta-btn" href="#">CTA button text</a>
-</section>
-
-<section class="lp-faq" data-animate="stagger-up">
-  <h2>Frequently Asked Questions</h2>
-  <div class="faq-list">
-    <details class="faq-item">
-      <summary>Question that handles a common objection?</summary>
-      <p>Answer that reassures and converts.</p>
-    </details>
-    <!-- Repeat for 4-5 FAQs -->
-  </div>
-</section>
-
-<section class="lp-footer" data-animate="fade-up">
-  <p>Final lightweight CTA line</p>
-  <a class="cta-btn cta-secondary" href="#">Secondary conversion CTA</a>
-</section>
-
-RULES:
-- Output ONLY the <section> elements above. No wrapping <html>, <body>, <head>, <style>, or <script>.
-- Use EXACTLY the class names shown (lp-hero, lp-problems, lp-features, etc.).
-- Use EXACTLY the data-animate values shown (fade-up, stagger-up, slide-left, zoom-in).
-- For the stats section, put the numeric value in the data-count attribute on .stat-number elements.
-- Every .feature-icon MUST contain only <i data-lucide="..." aria-hidden="true"></i> with a valid Lucide PascalCase name (not a placeholder like ICON_SUGGESTION).
-- Fill in real, compelling copy for every element — never leave placeholder instructions in the output.
-- Follow the emotional arc: Problem → Agitation → Solution → Proof → Action.
-- Never style or describe custom gradients in copy — rely on cta-btn / template classes for #FF7404→#FF3BA2 only.`,
+QUALITY:
+- Must run in a single file in Chromium/Safari/Firefox without errors.
+- No placeholder lorem — real copy from the user’s topic or sensible specifics.`,
 };
 
 
@@ -403,30 +269,19 @@ WARNING: Never make the contrarian take about the author being smarter than ever
 
   "landing-page": `TEMPLATE: Product Landing Page
 
-${ENKRYPT_FRONTEND_SKILL_DIRECTIVE}
+When this template is selected with the Landing channel, the API builds the system prompt from **enkrypt-frontend-design-SKILL.md** plus logo URLs — not this block alone. Emphasize conversion copy, clear CTAs, and one coherent narrative from the user's source. Output is a **full HTML document** per the skill (not section-only fragments).`,
 
-You are creating a conversion-optimized product landing page. Output production-ready HTML sections following the exact format specified in the channel prompt.
+  "html-video-builder": `TEMPLATE: HTML Video (screen-recordable)
 
-The exported page shell applies Enkrypt marketing styling: CTA gradient is always #FF7404→#FF3BA2 (via class cta-btn). Do not describe alternate brand gradients. Feature tiles MUST use Lucide: only <i data-lucide="PascalCaseName" aria-hidden="true"></i> inside each .feature-icon (same icon names as lucide-react); the shell loads Lucide from CDN and renders outline SVGs — no emoji stacks or plain-text glyphs in .feature-icon.
+You are building a **single-file HTML “video”** per the **html-video** channel rules and the full HTML VIDEO BUILDER skill.
 
 CREATIVE DIRECTION:
-- The hero headline should have 2 variants as a comment: <!-- A/B: "Variant A headline" / "Variant B headline" -->
-- Pain points should use the audience's exact language, not marketing speak.
-- Features must map directly to the pain points — each feature resolves a specific pain.
-- The "How It Works" section should be dead simple: 3 steps, each understandable by a non-technical person.
-- Stats section: use real-sounding, specific numbers (not round numbers). "97.3%" is more believable than "99%". Include data-count attributes for animation.
-- Testimonials: write realistic quotes that mention specific outcomes, not generic praise.
-- FAQ: address the top objections that would prevent a visitor from converting.
-- CTA buttons: use first-person, action-oriented text. "Start My Free Trial" beats "Get Started".
+- Plan the **story arc** first (beats → scenes). Each beat becomes one or more \`.scene\` ids.
+- Match **durations** to density: punchy title cards 3–4s, stat or terminal scenes 5–7s, CTA 4–6s.
+- Use typewriter, scan steps, count-up, or card grids when they reinforce the narrative — not on every scene.
+- If the brief is Enkrypt AI or security/product, lean into terminal, stats, and scan motifs from the skill; otherwise adapt layout and palette to the product.
 
-QUALITY CHECKLIST:
-- Every section must use the exact class names from the channel format (lp-hero, lp-problems, lp-features, lp-how-it-works, lp-stats, lp-testimonials, lp-cta, lp-faq, lp-footer).
-- Every section must have the correct data-animate attribute.
-- Every .feature-icon must contain only <i data-lucide="..." aria-hidden="true"></i> with a valid Lucide PascalCase icon name.
-- Do NOT output markdown, <style>, <script>, or wrapper HTML — only <section> elements.
-- Fill in compelling, specific copy. No placeholder text or instructions left in the output.
-
-AVOID: Jargon in headlines, feature-first language (lead with benefits), generic stock photo directions, and CTAs that say "Learn More".`,
+OUTPUT: One \`.html\`-ready document only — no markdown wrapper.`,
 
   "event-takeaways": `TEMPLATE: Event Takeaways
 
@@ -465,7 +320,7 @@ VOICE: Confident, evidence-driven, slightly punchy. Think Mythbusters, not Wikip
 
 // ─── Brand Context Builder ───────────────────────────────────────────────
 
-function buildBrandContext(brand) {
+export function buildBrandContext(brand) {
   if (!brand) return "";
   
   const lines = [
@@ -513,17 +368,7 @@ export function buildSystemPrompt({ channel, templateId, brand, numVariants = 1 
   const channelPrompt = CHANNEL_PROMPTS[channel] || CHANNEL_PROMPTS.linkedin;
   const templatePrompt = templateId ? TEMPLATE_PROMPTS[templateId] : "";
   const brandContext = buildBrandContext(brand);
-  const landingCompliance =
-    channel === "landing"
-      ? `
-COMPLIANCE (required — applies to this entire response):
-- Treat the FRONTEND SKILL / ENKRYPT blocks above as mandatory, not stylistic suggestions.
-- For lp-features: every .feature-icon must contain ONLY <i data-lucide="PascalCaseIconName" aria-hidden="true"></i> (names from https://lucide.dev/icons , same as lucide-react). Never put emoji, Unicode symbols, or bare letters inside .feature-icon.
-`
-      : "";
-
   return `${channelPrompt}
-${landingCompliance}
 ${templatePrompt ? `\n${templatePrompt}\n` : ""}
 ${brandContext ? `\n${brandContext}\n` : ""}
 VARIANT INSTRUCTIONS:

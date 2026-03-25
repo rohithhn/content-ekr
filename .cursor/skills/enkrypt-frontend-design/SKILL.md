@@ -30,7 +30,7 @@ Do **not** invent alternate logo URLs or gradients for Enkrypt when this repo is
 
 ## For Claude, ChatGPT, or other external assistants
 
-When working in the **content-engine** monorepo, follow this skill end-to-end. Content Studio’s **Landing** channel loads this document automatically via the text API (no manual paste). Landing HTML feature tiles must use **Lucide**: `<i data-lucide="PascalCaseName" aria-hidden="true"></i>` inside `.feature-icon`; the shell in `landing-template.js` loads Lucide UMD and calls `createIcons()`.
+When working in the **content-engine** monorepo, follow this skill end-to-end. Content Studio’s **Landing** channel loads this document automatically via the text API (no manual paste). Landing **`.feature-icon`** tiles may use **Lucide** (`<i data-lucide="…">` — shell calls `createIcons()`), **inline SVG**, **emoji/symbol** in `<span class="feature-icon-markup">`, or **`<img>`**; see **Icon system** below.
 
 ---
 
@@ -240,22 +240,22 @@ In Content Studio landing sections, primary CTA uses class **`cta-btn`** (same g
 
 ## Icon system
 
-- **Style:** Lucide (preferred in this repo — matches `lucide-react`), Heroicons, or equivalent outline/minimal icons.
-- **Stroke:** ~1.5–2px, consistent.
+- **Landing `.feature-icon` — you choose:** One clear mark per tile — **(1)** Lucide `<i data-lucide="PascalCaseName">` (shell loads Lucide UMD + `createIcons()`), **(2)** compact inline `<svg>` (`currentColor` / white on gradient tiles), **(3)** `<span class="feature-icon-markup" aria-hidden="true">` with an emoji or symbol, or **(4)** `<img src="…" alt="">`. No long text or random characters as the icon; keep contrast on the brand gradient.
+- **Elsewhere (designer, docs):** Prefer outline/minimal icons (Lucide / Heroicons-style). **Stroke:** ~1.5–2px, consistent when using stroked SVGs.
 - **Sizes:** 16px inline, 20px standard, 24px feature, 32px hero accent.
-- **On gradient:** white `#FFFFFF` only.
+- **On gradient:** white `#FFFFFF` / `currentColor` for icon glyphs.
 - **Light mode surfaces:** `#555555` / `#888888`; **dark mode:** `#A0A0AA` / `#6B6B78`.
-- **Never:** 3D icons, emoji as structural icons, heavy filled sets, mixed stroke weights.
+- **Avoid:** cluttered 3D clipart, illegible tiny emoji walls, mixed unrelated styles in one row.
 
 ### Landing page HTML (exported from Content Studio)
 
-Inside each **`.feature-icon`**, use only:
+Example options inside **`.feature-icon`**:
 
 ```html
 <div class="feature-icon"><i data-lucide="Shield" aria-hidden="true"></i></div>
+<div class="feature-icon"><span class="feature-icon-markup" aria-hidden="true">🔒</span></div>
+<div class="feature-icon"><svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2">…</svg></div>
 ```
-
-`data-lucide` values are **PascalCase** Lucide names (see https://lucide.dev/icons ). The animated shell loads Lucide UMD and runs `createIcons()`.
 
 ---
 
@@ -415,7 +415,7 @@ Map URLs from **Brand Editor** when integrating Content Studio: `LIGHT_SURFACE_L
 - [ ] Primary CTA uses full gradient + shadow + hover.
 - [ ] Inter loaded and applied.
 - [ ] Theme toggle updates `data-theme` and logo `src`.
-- [ ] Icons consistent stroke/weight; landing `.feature-icon` uses `data-lucide` only.
+- [ ] Icons readable on gradient; landing `.feature-icon` holds one deliberate mark (Lucide, SVG, markup span, or img).
 - [ ] Responsive where applicable.
 
 ---

@@ -9,38 +9,13 @@ description: >
   motion, and spatial composition — as long as contrast and readability are preserved.
 ---
 
-## Unified source (Content Studio + designer + API)
-
-Do **not** invent alternate logo URLs or gradients for Enkrypt when this repo is in use.
-
-| Layer | Where it lives |
-|-------|----------------|
-| **Brand record** | Content Studio → Brands → Brand Editor (`logos.primary`, `logos.dark`, colors, Inter, etc.) |
-| **Default lockup PNGs** | `content-studio/public/brand/enkrypt-logo-light-bg.png` (dark wordmark on **light** surfaces) and `enkrypt-logo-dark-bg.png` (light wordmark on **dark** surfaces) |
-| **Shared constants** | `content-studio/lib/brand/enkrypt-defaults.js` — **single module**: logo URLs, gradient hex, designer semantic colors, `createDefaultEnkryptBrand()`, `createBrandEditorEmptyDefaults()`, `BRAND_EDITOR_LOGO` copy for the Brand Editor UI, `createEnkryptNoTemplateTheme()` for the designer “No template” row, `ENKRYPT_PREVIEW_GRADIENT_STOPS` for canvas export. Landing template and `studioBrandBridge` import from here. |
-| **Designer embed** | Uses Brand Editor snapshot: white export → `logos.primary`; dark/transparent canvas → prefer `logos.dark` |
-| **Claude / landing API** | Bundled copy: `content-studio/lib/prompts/enkrypt-frontend-design-SKILL.md` (keep in sync with this file) |
-
-**Brand JSON mapping (never invert):**
-
-- **`logos.primary`** — Lockup for **light / white** UI (`data-theme="light"`, light sections, designer white background). Default file: `enkrypt-logo-light-bg.png`.
-- **`logos.dark`** — Lockup for **dark** UI (`data-theme="dark"`, dark hero). Default file: `enkrypt-logo-dark-bg.png`.
-
----
-
-## For Claude, ChatGPT, or other external assistants
-
-When working in the **content-engine** monorepo, follow this skill end-to-end. Content Studio’s **Landing** channel loads this document automatically via the text API (no manual paste). Landing HTML feature tiles must use **Lucide**: `<i data-lucide="PascalCaseName" aria-hidden="true"></i>` inside `.feature-icon`; the shell in `landing-template.js` loads Lucide UMD and calls `createIcons()`.
-
----
-
 # Enkrypt AI Frontend Design Skill
 
 You are designing a **production-grade, brand-consistent** frontend artifact for **Enkrypt AI** — a premium AI security platform. Every pixel must feel intentional: modern, minimal, trustworthy, and visually premium.
 
 ---
 
-## Brand gradient — single source of truth
+## BRAND GRADIENT — THE SINGLE SOURCE OF TRUTH
 
 ```
 LINEAR GRADIENT: #FF7404 (0%) → #FF3BA2 (100%)
@@ -48,16 +23,14 @@ Direction: Left → Right (horizontal) by default.
            Adjust angle for decorative/background uses (e.g., 135deg for diagonal accents).
 ```
 
-### Use gradient for
-
+### USE GRADIENT FOR:
 - Primary CTA buttons
 - Key highlight badges, pills, tags, emphasis text
 - Important icons / accent shapes
 - Active states, selected indicators
 - Decorative geometric shapes / brand accents
 
-### Never
-
+### NEVER:
 - Use any other gradient (purple, blue, rainbow, etc.)
 - Use the gradient as a full-page background flood
 - Let gradient blend into a similarly-toned background
@@ -65,41 +38,42 @@ Direction: Left → Right (horizontal) by default.
 
 ---
 
-## Logo usage — light & dark mode
+## LOGO USAGE — LIGHT & DARK MODE
 
-Enkrypt AI has **two logo variants**. In Content Studio they are prefilled from `public/brand/`; elsewhere use the same paths or the brand’s uploaded URLs.
+Enkrypt AI has **two logo variants**. Always ask the user to provide both, or reference them if already uploaded:
 
-| UI / surface | Variant | Brand Editor field | Default asset |
-|--------------|---------|-------------------|---------------|
-| Light / white backgrounds | **Dark** wordmark | `logos.primary` | `enkrypt-logo-light-bg.png` |
-| Dark backgrounds | **Light / white** wordmark | `logos.dark` | `enkrypt-logo-dark-bg.png` |
+| Mode        | Logo         | Use When                          |
+|-------------|--------------|-----------------------------------|
+| Light Mode  | Dark logo    | White / light neutral backgrounds |
+| Dark Mode   | Light/white logo | Dark backgrounds (#0D0D0D, #111, etc.) |
 
-### Implementation pattern
-
+### Implementation Pattern:
 ```css
-/* Theme: light surface → primary lockup; dark surface → dark-field lockup (light glyph) */
-:root[data-theme="light"] #logo { content: url('/brand/enkrypt-logo-light-bg.png'); }
-:root[data-theme="dark"] #logo { content: url('/brand/enkrypt-logo-dark-bg.png'); }
+/* Always use CSS variables so logos swap with theme */
+--logo-src: url('/logo-dark.svg');   /* light mode default */
+
+[data-theme="dark"] {
+  --logo-src: url('/logo-light.svg');
+}
 ```
 
 ```html
-<img id="logo" src="/brand/enkrypt-logo-light-bg.png" alt="Enkrypt AI" />
+<!-- In HTML artifacts, use class-based or data-theme switching -->
+<img id="logo" src="logo-dark.svg" alt="Enkrypt AI" />
+
 <script>
-  const logoForLightSurface = '/brand/enkrypt-logo-light-bg.png';
-  const logoForDarkSurface = '/brand/enkrypt-logo-dark-bg.png';
   const logo = document.getElementById('logo');
   const applyTheme = (dark) => {
-    document.documentElement.dataset.theme = dark ? 'dark' : 'light';
-    if (logo) logo.src = dark ? logoForDarkSurface : logoForLightSurface;
+    logo.src = dark ? 'logo-light.svg' : 'logo-dark.svg';
   };
 </script>
 ```
 
-If only one URL exists in Brand Editor, keep contrast rules and note the missing variant.
+**If only one logo is provided**, infer the correct usage and note to the user which variant is missing.
 
 ---
 
-## Color system
+## COLOR SYSTEM
 
 ```css
 :root {
@@ -151,13 +125,14 @@ If only one URL exists in Brand Editor, keep contrast rules and note the missing
 
 ---
 
-## Typography — Inter
+## TYPOGRAPHY — INTER SYSTEM
 
 ```css
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap');
 
 * { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; }
 
+/* TYPE SCALE */
 .heading-xl  { font-size: 48px; font-weight: 700; line-height: 1.1; letter-spacing: -0.03em; }
 .heading-lg  { font-size: 36px; font-weight: 700; line-height: 1.15; letter-spacing: -0.025em; }
 .heading-md  { font-size: 28px; font-weight: 600; line-height: 1.2; letter-spacing: -0.02em; }
@@ -171,7 +146,9 @@ If only one URL exists in Brand Editor, keep contrast rules and note the missing
 
 ---
 
-## CTA — primary focus
+## CTA BUTTON DESIGN — PRIMARY FOCUS
+
+The CTA is the most important element. Make it undeniably clickable.
 
 ```css
 .cta-primary {
@@ -216,6 +193,7 @@ If only one URL exists in Brand Editor, keep contrast rules and note the missing
   filter: brightness(0.97);
 }
 
+/* Secondary/ghost CTA */
 .cta-secondary {
   background: transparent;
   color: var(--text-primary);
@@ -234,56 +212,77 @@ If only one URL exists in Brand Editor, keep contrast rules and note the missing
 }
 ```
 
-In Content Studio landing sections, primary CTA uses class **`cta-btn`** (same gradient — do not invent other brand gradients).
-
 ---
 
-## Icon system
+## ICON SYSTEM
 
-- **Style:** Lucide (preferred in this repo — matches `lucide-react`), Heroicons, or equivalent outline/minimal icons.
-- **Stroke:** ~1.5–2px, consistent.
-- **Sizes:** 16px inline, 20px standard, 24px feature, 32px hero accent.
-- **On gradient:** white `#FFFFFF` only.
-- **Light mode surfaces:** `#555555` / `#888888`; **dark mode:** `#A0A0AA` / `#6B6B78`.
-- **Never:** 3D icons, emoji as structural icons, heavy filled sets, mixed stroke weights.
+```
+Style: Lucide Icons, Heroicons, or equivalent outline/minimal icons
+Stroke width: 1.5px (consistent across all icons)
+Size: 16px (inline), 20px (standard), 24px (feature), 32px (hero accent)
 
-### Landing page HTML (exported from Content Studio)
+Primary icons (on CTA, highlights):
+  → Use white (#FFFFFF) when on gradient background
+  → Use gradient color when on light/dark bg with gradient accent
 
-Inside each **`.feature-icon`**, use only:
+Secondary icons:
+  → Light mode: #555555 or #888888
+  → Dark mode: #A0A0AA or #6B6B78
 
-```html
-<div class="feature-icon"><i data-lucide="Shield" aria-hidden="true"></i></div>
+NEVER use: 3D icons, emoji-style icons, filled heavy icons, inconsistent stroke widths
 ```
 
-`data-lucide` values are **PascalCase** Lucide names (see https://lucide.dev/icons ). The animated shell loads Lucide UMD and runs `createIcons()`.
+---
+
+## LAYOUT & SPATIAL RULES
+
+Claude has **full creative latitude** on layout. Go bold. But follow these constraints:
+
+### ENCOURAGED:
+- Asymmetric grids, diagonal sections, overlapping elements
+- Bold negative space or controlled density — pick an extreme
+- Layered backgrounds: subtle noise textures, mesh gradients, geometric shapes as accents
+- Grid-breaking hero elements, large typographic lockups
+- Glassmorphism cards on dark backgrounds (with brand-colored borders)
+- Animated gradient orbs/blobs as background atmosphere (use brand colors at low opacity)
+- Bento grid layouts for feature displays
+- Split compositions with brand gradient as the visual anchor
+
+### CONTRAST RULES (NON-NEGOTIABLE):
+- NEVER: Dark text on dark bg (#111 text on #0D0D0F bg)
+- NEVER: Light text on light bg (#F2F2F4 text on #FFFFFF)
+- NEVER: Orange/pink brand elements on orange/pink backgrounds
+- NEVER: Gradient elements that disappear into the background
+- ALWAYS: Test every element for WCAG AA contrast (4.5:1 for text, 3:1 for UI)
+
+### Contrast Quick Reference:
+```
+Light bg (#FFF / #F7F7F8):
+  → Primary text: #111111
+  → Secondary text: #555555
+  → Brand gradient elements: clearly visible
+
+Dark bg (#0D0D0F / #141417):
+  → Primary text: #F2F2F4
+  → Secondary text: #A0A0AA
+  → Brand gradient elements: clearly visible
+
+Gradient bg (#FF7404 → #FF3BA2):
+  → Text: #FFFFFF only
+  → Icons: #FFFFFF only
+```
 
 ---
 
-## Layout and spatial rules
-
-**Encouraged:** asymmetric grids, diagonal sections, overlap, bold negative space or controlled density, subtle noise/mesh, bento grids, split heroes, glass cards on dark with brand border accents, low-opacity brand orbs, grid-breaking heroes.
-
-**Non-negotiable contrast**
-
-- Never dark-on-dark or light-on-light body text.
-- Never brand orange/pink UI that disappears into similar backgrounds.
-- Target **WCAG AA** (~4.5:1 text, ~3:1 UI).
-
-**Quick reference**
-
-- Light bg: text `#111` / secondary `#555`.
-- Dark bg: text `#F2F2F4` / secondary `#A0A0AA`.
-- Gradient band: text and icons `#FFFFFF` only.
-
----
-
-## Motion and interaction
+## MOTION & INTERACTION GUIDELINES
 
 ```css
+/* Smooth, purposeful transitions — not flashy */
 --transition-fast: 0.12s ease;
 --transition-base: 0.20s ease;
 --transition-slow: 0.35s cubic-bezier(0.4, 0, 0.2, 1);
 
+/* Page load: staggered reveal */
 @keyframes fadeUp {
   from { opacity: 0; transform: translateY(16px); }
   to   { opacity: 1; transform: translateY(0); }
@@ -293,6 +292,7 @@ Inside each **`.feature-icon`**, use only:
   animation: fadeUp 0.5s cubic-bezier(0.4, 0, 0.2, 1) both;
 }
 
+/* Gradient shimmer for loading/emphasis */
 @keyframes gradientShift {
   0%   { background-position: 0% 50%; }
   50%  { background-position: 100% 50%; }
@@ -308,42 +308,47 @@ Inside each **`.feature-icon`**, use only:
 
 ---
 
-## Light / dark mode toggle (logos stay in sync)
+## LIGHT / DARK MODE TOGGLE PATTERN
 
-```javascript
-const root = document.documentElement;
-const logo = document.getElementById('logo');
-const logoForLightSurface = '/brand/enkrypt-logo-light-bg.png';
-const logoForDarkSurface = '/brand/enkrypt-logo-dark-bg.png';
-const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-let isDark = localStorage.getItem('enkrypt-theme')
-  ? localStorage.getItem('enkrypt-theme') === 'dark'
-  : prefersDark;
+```html
+<button id="themeToggle" aria-label="Toggle theme">
+  <!-- Sun/Moon icon -->
+</button>
 
-function applyTheme() {
-  root.setAttribute('data-theme', isDark ? 'dark' : 'light');
-  if (logo) logo.src = isDark ? logoForDarkSurface : logoForLightSurface;
-  localStorage.setItem('enkrypt-theme', isDark ? 'dark' : 'light');
-}
+<script>
+  const root = document.documentElement;
+  const logo = document.getElementById('logo');
+  
+  const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+  let isDark = localStorage.getItem('enkrypt-theme') 
+    ? localStorage.getItem('enkrypt-theme') === 'dark' 
+    : prefersDark;
 
-document.getElementById('themeToggle')?.addEventListener('click', () => {
-  isDark = !isDark;
+  const applyTheme = () => {
+    root.setAttribute('data-theme', isDark ? 'dark' : 'light');
+    if (logo) logo.src = isDark ? 'logo-light.svg' : 'logo-dark.svg';
+    localStorage.setItem('enkrypt-theme', isDark ? 'dark' : 'light');
+  };
+
+  document.getElementById('themeToggle').addEventListener('click', () => {
+    isDark = !isDark;
+    applyTheme();
+  });
+
   applyTheme();
-});
-
-applyTheme();
+</script>
 ```
 
-Map URLs from **Brand Editor** when integrating Content Studio: `LIGHT_SURFACE_LOGO` → `logos.primary`, `DARK_SURFACE_LOGO` → `logos.dark`.
+(Replace placeholder logo filenames with the **exact URLs** given in the API runtime block.)
 
 ---
 
-## Component patterns
+## COMPONENT PATTERNS
 
-### Badge / pill
-
+### Badge / Pill (Brand Highlight)
 ```html
 <span class="badge-brand">New</span>
+
 <style>
 .badge-brand {
   background: linear-gradient(90deg, #FF7404, #FF3BA2);
@@ -358,8 +363,7 @@ Map URLs from **Brand Editor** when integrating Content Studio: `LIGHT_SURFACE_L
 </style>
 ```
 
-### Card + gradient border accent
-
+### Card (Surface)
 ```css
 .card {
   background: var(--surface);
@@ -375,16 +379,16 @@ Map URLs from **Brand Editor** when integrating Content Studio: `LIGHT_SURFACE_L
   transform: translateY(-2px);
 }
 
+/* Gradient accent card */
 .card-accent {
   border: 1px solid transparent;
-  background:
+  background: 
     linear-gradient(var(--surface), var(--surface)) padding-box,
     linear-gradient(90deg, #FF7404, #FF3BA2) border-box;
 }
 ```
 
 ### Input
-
 ```css
 .input {
   background: var(--bg-secondary);
@@ -407,33 +411,36 @@ Map URLs from **Brand Editor** when integrating Content Studio: `LIGHT_SURFACE_L
 
 ---
 
-## Pre-flight checklist
+## PRE-FLIGHT CHECKLIST
 
-- [ ] Brand gradient is only `#FF7404` → `#FF3BA2` (no substitute gradients).
-- [ ] **Light surface → `logos.primary` (light-bg PNG); dark surface → `logos.dark` (dark-bg PNG).**
-- [ ] Text/background contrast passes WCAG AA.
-- [ ] Primary CTA uses full gradient + shadow + hover.
-- [ ] Inter loaded and applied.
-- [ ] Theme toggle updates `data-theme` and logo `src`.
-- [ ] Icons consistent stroke/weight; landing `.feature-icon` uses `data-lucide` only.
-- [ ] Responsive where applicable.
+Before finalizing any artifact, verify:
 
----
-
-## Design direction options
-
-Pick **one** and execute fully:
-
-1. **Glassmorphic dark** — deep bg, frosted cards, gradient orbs, light logo (`logos.dark` asset).
-2. **Editorial light** — white space, sharp type, dark logo (`logos.primary` asset), gradient accent.
-3. **Bento dashboard** — information grid, gradient for highlights.
-4. **Split gradient hero** — half neutral / half gradient, asymmetric type.
-5. **Minimal terminal** — dark + monospace touches, single gradient focal.
-6. **Magazine grid** — overlap, editorial type, gradient as overlay.
+- [ ] Brand gradient is ONLY `linear-gradient(90deg, #FF7404, #FF3BA2)` — no other gradients
+- [ ] Logo uses correct variant for the mode (dark logo on light bg, light logo on dark bg)
+- [ ] All text-on-background combinations pass contrast
+- [ ] CTA button uses full gradient with shadow + hover state
+- [ ] Inter font is loaded and applied everywhere
+- [ ] Dark mode works and swaps logo correctly
+- [ ] No random/decorative gradients that aren't the brand gradient
+- [ ] Icons are consistent stroke width throughout
+- [ ] Mobile responsive (if applicable)
 
 ---
 
-## Quick start HTML shell
+## DESIGN DIRECTION OPTIONS
+
+When Claude has freedom to choose a direction, pick ONE and execute fully:
+
+1. **Glassmorphic Dark** — Deep dark bg, frosted glass cards, gradient orb atmosphere, light logo
+2. **Editorial Light** — Crisp white, bold typography, large negative space, dark logo, gradient as sharp accent
+3. **Bento Dashboard** — Dense information grid, mixed card sizes, brand gradient as status/highlight system
+4. **Split Gradient Hero** — Half white / half gradient section, asymmetric layout, dramatic type
+5. **Minimal Terminal** — Dark bg with monospace accents, gradient used as a single focal highlight
+6. **Magazine Grid** — Overlapping asymmetric columns, editorial typography, brand gradient as photography overlay
+
+---
+
+## QUICK START TEMPLATE
 
 ```html
 <!DOCTYPE html>
@@ -444,6 +451,7 @@ Pick **one** and execute fully:
   <title>Enkrypt AI</title>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet" />
   <style>
+    /* Paste full CSS variable block + component styles here */
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     body {
       font-family: 'Inter', sans-serif;
@@ -454,26 +462,10 @@ Pick **one** and execute fully:
   </style>
 </head>
 <body>
-  <!-- content -->
-  <script>/* theme + logo sync using paths above */</script>
+  <!-- Your artifact content -->
+  <script>
+    /* Theme toggle script — use RUNTIME ASSETS logo URLs from the API */
+  </script>
 </body>
 </html>
-```
-
----
-
-## Out of scope
-
-- Non-Enkrypt brands (use their tokens).
-- AI **generated social bitmaps** where the pipeline forbids drawing the logo — this skill targets **UI and marketing HTML/CSS**, not that rule.
-- Replacing product data models; map logos to `logos.primary` / `logos.dark` only.
-
----
-
-## Bundled copy (sync)
-
-When you edit this file, update **`content-studio/lib/prompts/enkrypt-frontend-design-SKILL.md`** (same contents) so `/api/generate/text` stays aligned.
-
-```bash
-cp .cursor/skills/enkrypt-frontend-design/SKILL.md content-studio/lib/prompts/enkrypt-frontend-design-SKILL.md
 ```
