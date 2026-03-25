@@ -4,26 +4,50 @@
  * Wraps AI-generated landing page sections in a self-contained HTML document
  * with CSS animations, IntersectionObserver-based scroll reveals, brand theming,
  * animated counters, and responsive layout.
+ *
+ * Visual shell follows Enkrypt AI marketing skill: gradient #FF7404 → #FF3BA2, Inter,
+ * header logo swaps with light/dark theme toggle.
  */
 
+const ENKRYPT_BRAND_GRADIENT = "linear-gradient(90deg, #FF7404 0%, #FF3BA2 100%)";
+const ENKRYPT_ORANGE = "#FF7404";
+const ENKRYPT_PINK = "#FF3BA2";
+
+/**
+ * Official Enkrypt lockups in `public/brand/` (white wordmark on dark bg; dark wordmark on light bg).
+ * Pass `assetBaseUrl: window.location.origin` from the browser so previews and downloads resolve images.
+ */
+export const ENKRYPT_DEFAULT_LANDING_LOGOS = {
+  forDarkBackground: "/brand/enkrypt-logo-dark-bg.png",
+  forLightBackground: "/brand/enkrypt-logo-light-bg.png",
+};
+
+function resolveLandingAssetUrl(path, assetBaseUrl) {
+  if (!path) return "";
+  if (/^https?:\/\//i.test(path) || path.startsWith("data:")) return path;
+  const base = (assetBaseUrl || "").replace(/\/$/, "");
+  if (!base) return path;
+  return `${base}${path.startsWith("/") ? path : `/${path}`}`;
+}
+
+function escapeAttr(s) {
+  if (s == null || s === "") return "";
+  return String(s).replace(/&/g, "&amp;").replace(/"/g, "&quot;");
+}
+
 function buildCSS(brand) {
-  const pc = brand?.colors?.primary || "#6C2BD9";
   const sc = brand?.colors?.secondary || "#14B8A6";
   const ac = brand?.colors?.accent || "#F59E0B";
   const bg = brand?.colors?.background || "#0C0D14";
   const sf = brand?.colors?.surface || "#1A1B23";
   const th = brand?.colors?.text_heading || "#F1F1F4";
   const tb = brand?.colors?.text_body || "#C4C6D0";
-  const hf = brand?.typography?.heading_font || "DM Sans";
-  const bf = brand?.typography?.body_font || "DM Sans";
   const br = brand?.layout?.border_radius_md || "12px";
   const mw = brand?.layout?.max_width || "1200px";
 
-  let gradientCSS = `linear-gradient(135deg, ${pc}, ${sc})`;
-  if (brand?.gradients?.[0]?.stops?.length >= 2) {
-    const g = brand.gradients[0];
-    gradientCSS = `${g.type}-gradient(${g.angle || 135}deg, ${g.stops.map(s => `${s.color} ${s.position}%`).join(", ")})`;
-  }
+  /* Landing shell: canonical Enkrypt marketing gradient (not brand purple/teal). */
+  const gradientCSS = ENKRYPT_BRAND_GRADIENT;
+  const pc = ENKRYPT_ORANGE;
 
   return `
     :root {
@@ -34,11 +58,46 @@ function buildCSS(brand) {
       --color-surface: ${sf};
       --color-heading: ${th};
       --color-body: ${tb};
-      --font-heading: '${hf}', system-ui, sans-serif;
-      --font-body: '${bf}', system-ui, sans-serif;
+      --font-heading: 'Inter', system-ui, sans-serif;
+      --font-body: 'Inter', system-ui, sans-serif;
       --radius: ${br};
       --max-width: ${mw};
       --gradient: ${gradientCSS};
+    }
+
+    html[data-theme="light"] {
+      --color-bg: #FFFFFF;
+      --color-surface: #F7F7F8;
+      --color-heading: #111111;
+      --color-body: #555555;
+    }
+
+    html[data-theme="light"] .pain-card,
+    html[data-theme="light"] .feature-card,
+    html[data-theme="light"] .testimonial-card {
+      background: #FFFFFF;
+      border-color: #E8E8EC;
+    }
+
+    html[data-theme="light"] .logo-placeholder {
+      background: #F0F0F2;
+      color: #555555;
+      border: 1px solid #E8E8EC;
+    }
+
+    html[data-theme="light"] .faq-item {
+      border-bottom-color: #E8E8EC;
+    }
+
+    html[data-theme="light"] .cta-secondary {
+      border-color: #E8E8EC !important;
+      color: #111111 !important;
+    }
+
+    html[data-theme="light"] .cta-secondary:hover {
+      border-color: ${ENKRYPT_ORANGE} !important;
+      background: rgba(255, 116, 4, 0.06) !important;
+      color: #111111 !important;
     }
 
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -75,29 +134,31 @@ function buildCSS(brand) {
       display: inline-block;
       padding: 16px 36px;
       background: var(--gradient);
-      color: white;
+      color: #FFFFFF;
       font-family: var(--font-heading);
       font-size: 1.05rem;
       font-weight: 700;
       border-radius: var(--radius);
       text-decoration: none;
-      transition: transform 0.3s cubic-bezier(.34,1.56,.64,1), box-shadow 0.3s ease;
-      box-shadow: 0 4px 24px rgba(0,0,0,0.2);
+      transition: transform 0.3s cubic-bezier(.34,1.56,.64,1), box-shadow 0.3s ease, filter 0.2s ease;
+      box-shadow: 0 4px 20px rgba(255, 116, 4, 0.32), 0 2px 8px rgba(255, 59, 162, 0.15);
       cursor: pointer;
     }
     .cta-btn:hover {
       transform: translateY(-3px) scale(1.03);
-      box-shadow: 0 8px 40px ${pc}44;
+      box-shadow: 0 8px 32px rgba(255, 116, 4, 0.45), 0 4px 16px rgba(255, 59, 162, 0.2);
+      filter: brightness(1.05);
     }
     .cta-secondary {
       background: transparent;
-      border: 2px solid var(--color-primary);
-      color: var(--color-primary);
+      border: 2px solid rgba(255, 255, 255, 0.22);
+      color: var(--color-heading);
       box-shadow: none;
     }
     .cta-secondary:hover {
-      background: var(--color-primary);
-      color: white;
+      border-color: ${ENKRYPT_ORANGE};
+      background: rgba(255, 116, 4, 0.08);
+      color: var(--color-heading);
     }
 
     /* ─── Hero ─────────────────────────────────────── */
@@ -114,7 +175,7 @@ function buildCSS(brand) {
       transform: translateX(-50%);
       width: 800px;
       height: 800px;
-      background: radial-gradient(circle, ${pc}18 0%, transparent 70%);
+      background: radial-gradient(circle, rgba(255, 116, 4, 0.14) 0%, transparent 70%);
       border-radius: 50%;
       pointer-events: none;
       z-index: 0;
@@ -276,7 +337,7 @@ function buildCSS(brand) {
       transform: translateX(-50%);
       width: 600px;
       height: 600px;
-      background: radial-gradient(circle, ${sc}14 0%, transparent 70%);
+      background: radial-gradient(circle, rgba(255, 59, 162, 0.12) 0%, transparent 70%);
       border-radius: 50%;
       pointer-events: none;
     }
@@ -363,7 +424,58 @@ function buildCSS(brand) {
     }
     @keyframes pulse-glow {
       0%, 100% { box-shadow: 0 4px 24px rgba(0,0,0,0.2); }
-      50% { box-shadow: 0 4px 40px ${pc}55; }
+      50% { box-shadow: 0 4px 40px rgba(255, 116, 4, 0.45), 0 2px 12px rgba(255, 59, 162, 0.25); }
+    }
+
+    /* ─── Top bar: logo + theme (Enkrypt skill) ───────────────────────────── */
+    .lp-header {
+      position: sticky;
+      top: 0;
+      z-index: 50;
+      background: color-mix(in srgb, var(--color-bg) 92%, transparent);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    }
+    html[data-theme="light"] .lp-header {
+      background: rgba(255, 255, 255, 0.9);
+      border-bottom-color: #E8E8EC;
+    }
+    .lp-header-inner {
+      max-width: var(--max-width);
+      margin: 0 auto;
+      padding: 16px 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+    }
+    .lp-header-logo {
+      height: 36px;
+      width: auto;
+      max-width: 200px;
+      object-fit: contain;
+      display: block;
+    }
+    .lp-theme-toggle {
+      flex-shrink: 0;
+      width: 40px;
+      height: 40px;
+      border-radius: 10px;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      background: var(--color-surface);
+      color: var(--color-heading);
+      font-size: 18px;
+      line-height: 1;
+      cursor: pointer;
+      transition: border-color 0.15s ease, background 0.15s ease;
+    }
+    html[data-theme="light"] .lp-theme-toggle {
+      border-color: #E8E8EC;
+      background: #FFFFFF;
+    }
+    .lp-theme-toggle:hover {
+      border-color: ${ENKRYPT_ORANGE};
     }
 
     /* ─── Responsive ───────────────────────────────── */
@@ -420,8 +532,89 @@ function buildJS() {
       document.querySelectorAll('.lp-stats').forEach(function(el) {
         counterObserver.observe(el);
       });
+
+      // Theme + logo swap (Enkrypt: dark bg → logos.dark; light → logos.primary)
+      var root = document.documentElement;
+      var logo = document.getElementById('lp-logo');
+      var tbtn = document.querySelector('.lp-theme-toggle');
+      if (tbtn && logo && logo.hasAttribute('data-logo-dark')) {
+        var darkSrc = logo.getAttribute('data-logo-dark') || '';
+        var lightSrc = logo.getAttribute('data-logo-light') || '';
+        function applyLandingTheme() {
+          var t = root.getAttribute('data-theme') || 'dark';
+          if (darkSrc && lightSrc) {
+            logo.src = t === 'dark' ? darkSrc : lightSrc;
+          }
+          tbtn.textContent = t === 'dark' ? '\u2600' : '\u263d';
+          tbtn.setAttribute('aria-label', t === 'dark' ? 'Switch to light theme' : 'Switch to dark theme');
+        }
+        tbtn.addEventListener('click', function() {
+          var next = root.getAttribute('data-theme') === 'light' ? 'dark' : 'light';
+          root.setAttribute('data-theme', next);
+          try { localStorage.setItem('enkrypt-landing-theme', next); } catch (e) {}
+          applyLandingTheme();
+        });
+        var stored = null;
+        try { stored = localStorage.getItem('enkrypt-landing-theme'); } catch (e) {}
+        if (stored === 'light' || stored === 'dark') {
+          root.setAttribute('data-theme', stored);
+        } else {
+          root.setAttribute('data-theme', 'dark');
+        }
+        applyLandingTheme();
+      } else if (tbtn) {
+        tbtn.addEventListener('click', function() {
+          var next = root.getAttribute('data-theme') === 'light' ? 'dark' : 'light';
+          root.setAttribute('data-theme', next);
+          try { localStorage.setItem('enkrypt-landing-theme', next); } catch (e) {}
+          tbtn.textContent = next === 'dark' ? '\u2600' : '\u263d';
+          tbtn.setAttribute('aria-label', next === 'dark' ? 'Switch to light theme' : 'Switch to dark theme');
+        });
+        var st = null;
+        try { st = localStorage.getItem('enkrypt-landing-theme'); } catch (e) {}
+        root.setAttribute('data-theme', st === 'light' ? 'light' : 'dark');
+        tbtn.textContent = root.getAttribute('data-theme') === 'dark' ? '\u2600' : '\u263d';
+      }
     });
   `;
+}
+
+function buildLandingHeader(brand, assetBaseUrl) {
+  const primary = brand?.logos?.primary || "";
+  const darkLogo = brand?.logos?.dark || "";
+  const nameStr = `${brand?.company_name || ""} ${brand?.name || ""}`;
+  const isEnkryptBrand = /enkrypt/i.test(nameStr);
+  /* Bundled PNGs are Enkrypt-only; other brands use custom URLs or gradient wordmark. */
+  const useBundledLogos = isEnkryptBrand;
+
+  const defDark = useBundledLogos
+    ? resolveLandingAssetUrl(ENKRYPT_DEFAULT_LANDING_LOGOS.forDarkBackground, assetBaseUrl)
+    : "";
+  const defLight = useBundledLogos
+    ? resolveLandingAssetUrl(ENKRYPT_DEFAULT_LANDING_LOGOS.forLightBackground, assetBaseUrl)
+    : "";
+
+  /* Dark theme header: light/white wordmark. Light theme: dark wordmark. */
+  const forDarkBg = darkLogo || defDark || primary;
+  const forLightBg = primary || defLight || darkLogo;
+
+  const alt = brand?.company_name || "Enkrypt AI";
+  const innerToggle =
+    '<button type="button" class="lp-theme-toggle" aria-label="Switch to light theme">\u2600</button>';
+  if (!forDarkBg && !forLightBg) {
+    return `<header class="lp-header" data-animate="fade-up">
+  <div class="lp-header-inner">
+    <span class="lp-header-wordmark" style="font-family:var(--font-heading);font-weight:800;font-size:1.15rem;letter-spacing:-0.02em;background:var(--gradient);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text">${escapeAttr(alt)}</span>
+    ${innerToggle}
+  </div>
+</header>`;
+  }
+  return `<header class="lp-header" data-animate="fade-up">
+  <div class="lp-header-inner">
+    <img id="lp-logo" class="lp-header-logo" src="${escapeAttr(forDarkBg)}" alt="${escapeAttr(alt)}" data-logo-dark="${escapeAttr(forDarkBg)}" data-logo-light="${escapeAttr(forLightBg)}" />
+    ${innerToggle}
+  </div>
+</header>`;
 }
 
 /**
@@ -473,28 +666,31 @@ function markdownToLandingSections(md) {
  * Builds a complete, self-contained HTML landing page document.
  * @param {string} bodyContent - AI-generated HTML sections or markdown
  * @param {object} brand - Brand configuration object
+ * @param {{ assetBaseUrl?: string }} [options] - e.g. `{ assetBaseUrl: window.location.origin }` so bundled Enkrypt logos load in preview/download
  * @returns {string} Full HTML document string
  */
-export function buildLandingPageHtml(bodyContent, brand) {
-  const hf = brand?.typography?.heading_font || "DM Sans";
-  const bf = brand?.typography?.body_font || "DM Sans";
-
+export function buildLandingPageHtml(bodyContent, brand, options = {}) {
+  const assetBaseUrl = options.assetBaseUrl || "";
   const sections = isStructuredHTML(bodyContent)
     ? bodyContent
     : markdownToLandingSections(bodyContent);
 
+  const header = buildLandingHeader(brand, assetBaseUrl);
+  const title = brand?.company_name || "Landing Page";
+
   return `<!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>${brand?.company_name || "Landing Page"}</title>
+  <title>${escapeAttr(title)}</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=${encodeURIComponent(hf)}:wght@400;600;700;800&family=${encodeURIComponent(bf)}:wght@400;500;600&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <style>${buildCSS(brand)}</style>
 </head>
 <body>
+${header}
 ${sections}
 <script>${buildJS()}</script>
 </body>

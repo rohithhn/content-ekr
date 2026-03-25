@@ -4,6 +4,11 @@ import { CHANNELS, TEMPLATES, TONES, INPUT_MODES, AI_MODELS, getChannelVisualSlo
 import { generateContentBundle, generateText, generateImage, generateDesignerStructure, parseUrl, checkProviderStatus } from "@/lib/ai/orchestrator";
 import { saveBrand, loadBrands, saveProject, loadProjects, loadProjectMessages } from "@/lib/db/index";
 import { buildLandingPageHtml } from "@/lib/templates/landing-template";
+
+function landingExportOptions() {
+  if (typeof window === "undefined") return {};
+  return { assetBaseUrl: window.location.origin };
+}
 import DesignerOverlay, { primeDesignerEmbed } from "@/components/DesignerOverlay";
 import DesignerMiniPreview from "@/components/DesignerMiniPreview";
 import DesignerPreviewThumb from "@/components/DesignerPreviewThumb";
@@ -173,7 +178,7 @@ function ExportModal({ open, onClose, activeChannels, currentBundle, addToast, a
     if (act === "copy") clipCopy(text).then(ok => addToast(ok ? "Copied!" : "Copy failed", ok ? "success" : "error"));
     else if (act === "md") { downloadFile(text, `${ch?.label || chId}.md`, "text/markdown"); addToast("Downloaded Markdown", "success"); }
     else if (act === "preview" && chId === "landing") {
-      const html = buildLandingPageHtml(text, activeBrand);
+      const html = buildLandingPageHtml(text, activeBrand, landingExportOptions());
       const blob = new Blob([html], { type: "text/html" });
       const url = URL.createObjectURL(blob);
       window.open(url, "_blank");
@@ -182,7 +187,7 @@ function ExportModal({ open, onClose, activeChannels, currentBundle, addToast, a
     }
     else if (act === "html") {
       if (chId === "landing") {
-        const html = buildLandingPageHtml(text, activeBrand);
+        const html = buildLandingPageHtml(text, activeBrand, landingExportOptions());
         downloadFile(html, `${activeBrand?.company_name || "Landing-Page"}.html`, "text/html"); addToast("Downloaded animated landing page", "success");
       } else {
         const hf = activeBrand?.typography?.heading_font || "system-ui";
@@ -752,12 +757,12 @@ function RightPanel({ activeChannels, setActiveChannels, activeChannel, setActiv
             <h2 style={{ fontSize: 16, fontWeight: 700, color: "#E2E4EA", margin: 0, ...(brandHFont ? { fontFamily: `'${brandHFont}', sans-serif` } : {}) }}>Landing Page Preview</h2>
             <div style={{ display: "flex", gap: 6 }}>
               <button onClick={() => setEditing(!editing)} style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid rgba(255,255,255,0.08)", background: editing ? "rgba(236,72,153,0.15)" : "rgba(255,255,255,0.03)", color: editing ? "#EC4899" : "#8B8DA3", fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>{editing ? "Preview" : "Edit Source"}</button>
-              <button onClick={() => { const html = buildLandingPageHtml(curText, activeBrand); const blob = new Blob([html], { type: "text/html" }); const url = URL.createObjectURL(blob); window.open(url, "_blank"); setTimeout(() => URL.revokeObjectURL(url), 60000); }} style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid rgba(236,72,153,0.3)", background: "rgba(236,72,153,0.1)", color: "#EC4899", fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>Open Full</button>
+              <button onClick={() => { const html = buildLandingPageHtml(curText, activeBrand, landingExportOptions()); const blob = new Blob([html], { type: "text/html" }); const url = URL.createObjectURL(blob); window.open(url, "_blank"); setTimeout(() => URL.revokeObjectURL(url), 60000); }} style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid rgba(236,72,153,0.3)", background: "rgba(236,72,153,0.1)", color: "#EC4899", fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>Open Full</button>
             </div>
           </div>
           {editing ? <textarea value={editText} onChange={e => setEditText(e.target.value)} style={{ width: "100%", minHeight: 300, padding: 12, borderRadius: 10, border: "1px solid rgba(236,72,153,0.3)", background: "rgba(236,72,153,0.03)", color: "#E2E4EA", fontSize: 12, fontFamily: "'JetBrains Mono', 'Fira Code', monospace", lineHeight: 1.6, outline: "none", resize: "vertical", boxSizing: "border-box", tabSize: 2 }} /> :
           <div style={{ borderRadius: 10, overflow: "auto", border: "1px solid rgba(255,255,255,0.08)", background: "#0C0D14", height: 600, position: "relative" }}>
-            <iframe srcDoc={buildLandingPageHtml(curText, activeBrand)} style={{ width: "200%", height: 3000, border: "none", transform: "scale(0.5)", transformOrigin: "top left", display: "block", pointerEvents: "auto" }} title="Landing Page Preview" />
+            <iframe srcDoc={buildLandingPageHtml(curText, activeBrand, landingExportOptions())} style={{ width: "200%", height: 3000, border: "none", transform: "scale(0.5)", transformOrigin: "top left", display: "block", pointerEvents: "auto" }} title="Landing Page Preview" />
           </div>}
           {editing && <div style={{ display: "flex", gap: 6, marginTop: 8 }}><button onClick={saveEdit} style={{ padding: "6px 14px", borderRadius: 7, border: "none", background: "linear-gradient(135deg,#EC4899,#6C2BD9)", color: "white", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>Save Changes</button><button onClick={() => { setEditing(false); setEditText(versions[versionIdx].text); }} style={{ padding: "6px 14px", borderRadius: 7, border: "1px solid rgba(255,255,255,0.08)", background: "transparent", color: "#8B8DA3", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>Cancel</button></div>}
         </div>}
