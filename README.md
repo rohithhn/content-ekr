@@ -2,18 +2,21 @@
 
 ## Vercel
 
-The Next.js app that should be deployed is in **`content-studio`** (not the repository root).
+### Your files stay in the repo
 
-1. Open your project on [Vercel](https://vercel.com/dashboard) → **Settings** → **Build & Deployment**.
-2. Under **Root Directory**, click **Edit**, set it to **`content-studio`**, and save.
-3. Under **Framework Preset**, choose **Next.js** (or leave auto-detect after the root change).
-4. Clear any custom **Output Directory** override unless you know you need it; Next.js on Vercel should use the default.
-5. Redeploy (**Deployments** → ⋮ on the latest → **Redeploy**).
+Setting **Root Directory** on Vercel only tells their servers **which folder to build**. It does **not** delete, move, or drop **`Content/`**, **`visual designer/`**, **`.cursor/`**, or anything else from GitHub or your machine. The full monorepo stays as-is; Vercel just runs `npm install` / `next build` **inside** `content-studio/`.
 
-If Root Directory stays empty, Vercel builds from the repo root, where there is no Next.js app, which often surfaces as **`404 NOT_FOUND`** on the deployment URL.
+### One-time project settings (avoids most Vercel errors)
 
-### “No Next.js version detected”
+1. [Vercel Dashboard](https://vercel.com/dashboard) → your project → **Settings** → **Build & Deployment**.
+2. **Root Directory** → **Edit** → **`content-studio`** → Save.  
+   (No leading `/`, exact spelling, not `Content` with a capital C.)
+3. **Framework Preset** → **Next.js** (or Auto after step 2).
+4. Turn **off** overrides for **Build Command**, **Output Directory**, and **Install Command** unless you added them on purpose — let `content-studio/vercel.json` and defaults apply when Root Directory is `content-studio`.
+5. **Deployments** → **Redeploy** the latest.
 
-That means Vercel is using the **wrong folder** as the project root (usually the repo root). Fix it by setting **Root Directory** to **`content-studio`** as above.
+If Root Directory is wrong or empty, you may see **`404 NOT_FOUND`** or **“No Next.js version detected”**.
 
-This repo also includes a **fallback** at the root (`vercel.json` + `package.json`) so a project left at the repository root can still install and build from `content-studio/`. The recommended setup is still **Root Directory = `content-studio`** so Vercel’s Next.js integration matches the app layout.
+### Fallback (repo root)
+
+If Root Directory is accidentally left as the repository root, the root **`vercel.json`** and **`package.json`** try to install/build from `./content-studio` anyway. Prefer fixing step 2 so Vercel’s Next.js integration matches the app layout.

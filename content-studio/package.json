@@ -2,6 +2,9 @@
   "name": "content-studio",
   "version": "0.1.0",
   "private": true,
+  "engines": {
+    "node": ">=18.18.0"
+  },
   "scripts": {
     "dev": "next dev -p 3000",
     "preview": "npm run build && next start -p 3000",
