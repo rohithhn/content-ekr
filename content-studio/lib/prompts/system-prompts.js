@@ -1,14 +1,51 @@
 /**
  * ContentEngine — System Prompts
- * 
+ *
  * Professional-grade prompt engineering for AI-powered content generation.
  * Each prompt is designed to produce publish-ready copy without modification.
- * 
+ *
  * Architecture:
  *   1. CHANNEL_PROMPTS — format/constraint rules per output channel
  *   2. TEMPLATE_PROMPTS — creative direction per content template
  *   3. buildSystemPrompt() — composes brand + channel + template into final prompt
+ *
+ * UI / code in this repo: Prefer lucide-react for icons in React/Next (`import { … } from "lucide-react"`
+ * or `StudioLucide` from `@/lib/studio-lucide`). Do not use emoji as stand-ins for toolbar, buttons,
+ * or navigation icons in Content Studio JSX. (Channel copy may still use platform-appropriate emoji per
+ * prompts below.)
+ *
+ * Landing / marketing HTML: Cursor skill **enkrypt-frontend-design** lives at
+ * `.cursor/skills/enkrypt-frontend-design/SKILL.md`. The same rules are inlined for API models via
+ * `ENKRYPT_FRONTEND_SKILL_DIRECTIVE` (landing channel + landing-page template). For Claude requests,
+ * `/api/generate/text` also appends the full skill body from `lib/prompts/enkrypt-frontend-design-SKILL.md`
+ * (see `load-enkrypt-frontend-skill.js`) when `channel === "landing"` — keep that file in sync with the Cursor skill.
  */
+
+/**
+ * Mirrors the Cursor Agent Skill **enkrypt-frontend-design**
+ * (`content-engine/.cursor/skills/enkrypt-frontend-design/SKILL.md`).
+ * Injected into landing HTML prompts so Claude/API models apply the same rules as Cursor.
+ *
+ * Share with Claude (paste): "For Enkrypt landing or marketing HTML in the content-engine repo,
+ * follow the skill enkrypt-frontend-design — open .cursor/skills/enkrypt-frontend-design/SKILL.md
+ * and apply it end-to-end (gradient, logos, Inter, outline icons, contrast, CTAs)."
+ */
+export const ENKRYPT_FRONTEND_SKILL_DIRECTIVE = `FRONTEND SKILL — enkrypt-frontend-design (MANDATORY — do not skip)
+Canonical spec: .cursor/skills/enkrypt-frontend-design/SKILL.md | skill id: enkrypt-frontend-design
+You MUST treat this block as binding for all landing-page HTML in this session. If any instruction conflicts with generic habits, follow THIS block and the landing OUTPUT FORMAT.
+
+- Primary brand gradient ONLY: linear-gradient(90deg, #FF7404, #FF3BA2) for primary CTAs and key brand accents — no purple/blue/rainbow as brand substitutes.
+- On gradient surfaces: text and icons #FFFFFF only. Elsewhere: WCAG AA contrast (light bg ~#111 / #555; dark bg ~#F2F2F4 / #A0A0AA).
+- Typography: Inter unless BRAND GUIDELINES specify the brand’s chosen heading/body fonts.
+- Logos: LIGHT surfaces → logos.primary (repo default /brand/enkrypt-logo-light-bg.png, dark glyph). DARK surfaces → logos.dark (repo default /brand/enkrypt-logo-dark-bg.png, light glyph). Never invert.
+- Icons: **Lucide** outline set only (same names as **lucide-react** / https://lucide.dev/icons ). No emoji as icons. No random Unicode dingbats in UI chrome.
+- Primary CTA = full gradient + white label + hover lift; secondary = outline, hover tied to #FF7404.
+- When BRAND GUIDELINES (Brand Editor) conflict with defaults here, follow the brand record for colors, type, and logo URLs.
+
+LANDING FEATURE ICONS (required for .feature-icon):
+- Each feature card MUST use: <div class="feature-icon"><i data-lucide="PascalCaseIconName" aria-hidden="true"></i></div>
+- IconName MUST be a real Lucide icon in PascalCase (e.g. Shield, Lock, Zap, BarChart3, Users, Sparkles, Cpu, Globe, KeyRound, Eye, Server, Workflow, Target, Lightbulb, CheckCircle2, Layers). Match the feature meaning.
+- Do NOT put plain text, emoji, or a lone letter inside .feature-icon — only the <i data-lucide="..."> tag. The host page injects Lucide and renders proper SVGs.`;
 
 // ─── Channel-Specific System Prompts ─────────────────────────────────────
 // These define the structural rules, format constraints, and platform-specific
@@ -105,10 +142,12 @@ FORMAT:
 
   landing: `You are a conversion-focused UX copywriter and front-end designer who has built landing pages for Y Combinator startups, Fortune 500 product launches, and everything in between. Every word you write moves the reader closer to clicking the CTA. You output production-ready HTML sections.
 
+${ENKRYPT_FRONTEND_SKILL_DIRECTIVE}
+
 ENKRYPT AI MARKETING SHELL (the page wrapper applies this — your HTML must match):
 - Primary CTAs use class "cta-btn": they render as the official brand gradient linear-gradient(90deg, #FF7404, #FF3BA2) with white text. Do NOT invent other gradients (no purple, blue, or rainbow) for buttons, badges, or "brand" bars.
 - Secondary CTA uses "cta-btn cta-secondary": outline style; hover ties to orange #FF7404.
-- Feature step numbers and feature-icon strips use the same orange→pink system via CSS — keep icon content minimal (one Unicode symbol, letter, or short abbreviation like "AI" / "API"), not cluttered emoji piles.
+- Feature icons: each .feature-icon wraps ONLY <i data-lucide="PascalCaseName" aria-hidden="true"></i> (Lucide library — same icon names as lucide-react). The page shell renders them as outline SVGs on the brand gradient tile — no emoji, no bare "AI"/"API" text inside .feature-icon.
 - Body copy tone can follow the user's brand; visual system is Enkrypt marketing defaults.
 - Do NOT add a top nav, global header, or Enkrypt logo <img> in your sections — Content Studio injects a sticky header with official lockups (dark background → white wordmark PNG; light theme → dark wordmark PNG) plus a theme toggle. Your output stays <section> blocks only.
 
@@ -152,7 +191,7 @@ OUTPUT FORMAT — You MUST output semantic HTML using exactly these section stru
   <h2>Section headline about the solution</h2>
   <div class="feature-grid">
     <div class="feature-card">
-      <div class="feature-icon">ICON_SUGGESTION</div>
+      <div class="feature-icon"><i data-lucide="Shield" aria-hidden="true"></i></div>
       <h3>Feature headline</h3>
       <p>2-sentence description focusing on outcome</p>
     </div>
@@ -220,6 +259,7 @@ RULES:
 - Use EXACTLY the class names shown (lp-hero, lp-problems, lp-features, etc.).
 - Use EXACTLY the data-animate values shown (fade-up, stagger-up, slide-left, zoom-in).
 - For the stats section, put the numeric value in the data-count attribute on .stat-number elements.
+- Every .feature-icon MUST contain only <i data-lucide="..." aria-hidden="true"></i> with a valid Lucide PascalCase name (not a placeholder like ICON_SUGGESTION).
 - Fill in real, compelling copy for every element — never leave placeholder instructions in the output.
 - Follow the emotional arc: Problem → Agitation → Solution → Proof → Action.
 - Never style or describe custom gradients in copy — rely on cta-btn / template classes for #FF7404→#FF3BA2 only.`,
@@ -363,9 +403,11 @@ WARNING: Never make the contrarian take about the author being smarter than ever
 
   "landing-page": `TEMPLATE: Product Landing Page
 
+${ENKRYPT_FRONTEND_SKILL_DIRECTIVE}
+
 You are creating a conversion-optimized product landing page. Output production-ready HTML sections following the exact format specified in the channel prompt.
 
-The exported page shell applies Enkrypt marketing styling: CTA gradient is always #FF7404→#FF3BA2 (via class cta-btn). Do not describe alternate brand gradients. Use minimal single-glyph feature icons, not emoji stacks.
+The exported page shell applies Enkrypt marketing styling: CTA gradient is always #FF7404→#FF3BA2 (via class cta-btn). Do not describe alternate brand gradients. Feature tiles MUST use Lucide: only <i data-lucide="PascalCaseName" aria-hidden="true"></i> inside each .feature-icon (same icon names as lucide-react); the shell loads Lucide from CDN and renders outline SVGs — no emoji stacks or plain-text glyphs in .feature-icon.
 
 CREATIVE DIRECTION:
 - The hero headline should have 2 variants as a comment: <!-- A/B: "Variant A headline" / "Variant B headline" -->
@@ -380,6 +422,7 @@ CREATIVE DIRECTION:
 QUALITY CHECKLIST:
 - Every section must use the exact class names from the channel format (lp-hero, lp-problems, lp-features, lp-how-it-works, lp-stats, lp-testimonials, lp-cta, lp-faq, lp-footer).
 - Every section must have the correct data-animate attribute.
+- Every .feature-icon must contain only <i data-lucide="..." aria-hidden="true"></i> with a valid Lucide PascalCase icon name.
 - Do NOT output markdown, <style>, <script>, or wrapper HTML — only <section> elements.
 - Fill in compelling, specific copy. No placeholder text or instructions left in the output.
 
@@ -435,13 +478,27 @@ function buildBrandContext(brand) {
     brand.tone?.words_to_avoid?.length ? `- AVOID these words/phrases: ${brand.tone.words_to_avoid.join(", ")}` : "",
     brand.audience?.persona_name ? `- Primary audience: ${brand.audience.persona_name}${brand.audience.industry ? ` in ${brand.audience.industry}` : ""}` : "",
     brand.audience?.language_register ? `- Language register: ${brand.audience.language_register}` : "",
-    brand.colors ? `- Brand Colors: primary ${brand.colors.primary}, secondary ${brand.colors.secondary}, accent ${brand.colors.accent}, background ${brand.colors.background}` : "",
+    brand.colors
+      ? brand.primary_as_gradient === false
+        ? `- Brand colors: primary (solid) ${brand.colors.primary}, secondary (solid) ${brand.colors.secondary}, accent ${brand.colors.accent}, background ${brand.colors.background}`
+        : (() => {
+            const ang = brand.gradients?.[0]?.angle;
+            const deg = typeof ang === "number" ? ` ~${ang}deg` : "";
+            return `- Brand gradient (primary)${deg}: ${brand.colors.primary} → ${brand.colors.secondary} — use as one linear brand gradient for emphasis; accent ${brand.colors.accent}; background ${brand.colors.background}`;
+          })()
+      : "",
     brand.typography ? `- Typography: headings "${brand.typography.heading_font}", body "${brand.typography.body_font}"` : "",
     brand.layout ? `- Layout: max-width ${brand.layout.max_width}, border-radius ${brand.layout.border_radius_md}, nav ${brand.layout.nav_style}` : "",
     brand.visual_style?.image_style ? `- Visual style: ${brand.visual_style.image_style}` : "",
     brand.logos?.description ? `- Logo: ${brand.logos.description}` : "",
     brand.logo_placement ? `- Logo placement: ${brand.logo_placement.replace("-", " ")} on visual assets` : "",
-    brand.logos?.primary ? `- Logo available: reference it in visual sections and hero areas` : "",
+    brand.logos?.primary
+      ? `- logos.primary (dark wordmark on LIGHT surfaces — default Enkrypt: enkrypt-logo-light-bg.png): ${brand.logos.primary}`
+      : "",
+    brand.logos?.dark
+      ? `- logos.dark (light wordmark on DARK surfaces — default Enkrypt: enkrypt-logo-dark-bg.png): ${brand.logos.dark}`
+      : "",
+    brand.logos?.primary || brand.logos?.dark ? `- Use the Brand Editor lockup URLs above for landing and designer; do not invent different logo assets` : "",
     brand.sample_backgrounds?.length ? `- Brand has ${brand.sample_backgrounds.length} sample background(s) for social posts — maintain visual consistency with established look` : "",
     brand.sample_templates?.length ? `- Brand has ${brand.sample_templates.length} post template(s) — follow the established layout and composition patterns` : "",
   ];
@@ -456,9 +513,17 @@ export function buildSystemPrompt({ channel, templateId, brand, numVariants = 1 
   const channelPrompt = CHANNEL_PROMPTS[channel] || CHANNEL_PROMPTS.linkedin;
   const templatePrompt = templateId ? TEMPLATE_PROMPTS[templateId] : "";
   const brandContext = buildBrandContext(brand);
+  const landingCompliance =
+    channel === "landing"
+      ? `
+COMPLIANCE (required — applies to this entire response):
+- Treat the FRONTEND SKILL / ENKRYPT blocks above as mandatory, not stylistic suggestions.
+- For lp-features: every .feature-icon must contain ONLY <i data-lucide="PascalCaseIconName" aria-hidden="true"></i> (names from https://lucide.dev/icons , same as lucide-react). Never put emoji, Unicode symbols, or bare letters inside .feature-icon.
+`
+      : "";
 
   return `${channelPrompt}
-
+${landingCompliance}
 ${templatePrompt ? `\n${templatePrompt}\n` : ""}
 ${brandContext ? `\n${brandContext}\n` : ""}
 VARIANT INSTRUCTIONS:
@@ -639,7 +704,7 @@ function buildTemplateReferenceSection(brand, channel, slot) {
     parts.push(`Typography guidance: headings use "${brand.typography.heading_font}" and body uses "${brand.typography.body_font}" — any text overlay areas should accommodate these font choices.`);
   }
 
-  if (brand?.gradients?.length) {
+  if (brand.primary_as_gradient !== false && brand?.gradients?.length) {
     const g = brand.gradients[0];
     if (g.stops?.length >= 2) {
       parts.push(`Brand gradient: ${g.type} ${g.angle || 135}deg from ${g.stops[0].color} to ${g.stops[g.stops.length - 1].color}. Use this gradient in backgrounds or accents where appropriate.`);

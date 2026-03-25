@@ -1,7 +1,7 @@
 "use client";
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { CHANNELS, TEMPLATES, TONES, INPUT_MODES, AI_MODELS, getChannelVisualSlotNames } from "@/config/constants";
-import { generateContentBundle, generateText, generateImage, generateDesignerStructure, parseUrl, checkProviderStatus } from "@/lib/ai/orchestrator";
+import { generateContentBundle, generateText, generateImage, generateDesignerStructure, parseUrl, prepareSourceArticle, analyzeUploadedFile, checkProviderStatus } from "@/lib/ai/orchestrator";
 import { saveBrand, loadBrands, saveProject, loadProjects, loadProjectMessages } from "@/lib/db/index";
 import { buildLandingPageHtml } from "@/lib/templates/landing-template";
 
@@ -14,17 +14,38 @@ import DesignerMiniPreview from "@/components/DesignerMiniPreview";
 import DesignerPreviewThumb from "@/components/DesignerPreviewThumb";
 import { extractGeneratedContentFromSummary } from "@/lib/designer-image/extractContent";
 import { DESIGNER_THEME_OPTIONS, DESIGNER_POST_SIZE_OPTIONS } from "@/lib/designer-image/themes";
+import { StudioLucide } from "@/lib/studio-lucide";
+import {
+  BRAND_EDITOR_LOGO,
+  createBrandEditorEmptyDefaults,
+  createDefaultEnkryptBrand,
+  hydrateEnkryptBrandForEditor,
+  isEnkryptStudioBrand,
+  syncEnkryptMarketingPrimaryToCanonical,
+} from "@/lib/brand/enkrypt-defaults";
 
 /** Chevron for styled native `<select>` (no custom overlay / portal). */
 const NATIVE_SELECT_CHEVRON =
   "url(\"data:image/svg+xml;charset=UTF-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%238B8DA3' d='M3 4.5L6 7.5L9 4.5'/%3E%3C/svg%3E\")";
 
 // ─── Shared Data ────────────────────────────────────────────────────────
-const GOOGLE_FONTS = ["DM Sans","Plus Jakarta Sans","Outfit","Manrope","Sora","Poppins","Nunito Sans","Lato","Raleway","Montserrat","Playfair Display","Crimson Pro","Merriweather","Source Serif 4","Space Grotesk","JetBrains Mono","IBM Plex Sans","Work Sans","Libre Franklin","Fira Code"];
+const GOOGLE_FONTS = ["Inter","DM Sans","Plus Jakarta Sans","Outfit","Manrope","Sora","Poppins","Nunito Sans","Lato","Raleway","Montserrat","Playfair Display","Crimson Pro","Merriweather","Source Serif 4","Space Grotesk","JetBrains Mono","IBM Plex Sans","Work Sans","Libre Franklin","Fira Code"];
 const defaultBrands = [
-  { id: "brand-1", name: "Enkrypt AI", company_name: "Enkrypt AI", tagline: "Secure AI, Everywhere", elevator_pitch: "The world's most comprehensive AI security platform.", colors: { primary: "#6C2BD9", secondary: "#14B8A6", accent: "#F59E0B", background: "#0C0D14", surface: "#1A1B23", text_heading: "#F1F1F4", text_body: "#C4C6D0" }, gradients: [{ name: "Hero", type: "linear", angle: 135, stops: [{ color: "#6C2BD9", position: 0 }, { color: "#14B8A6", position: 100 }] }], typography: { heading_font: "DM Sans", body_font: "DM Sans" }, layout: { max_width: "1200px", border_radius_sm: "6px", border_radius_md: "12px", border_radius_lg: "20px", nav_style: "sticky" }, tone: { descriptors: ["Authoritative","Technical","Approachable"], cta_style: "Action-oriented", words_to_use: ["secure","protect","trust"], words_to_avoid: ["cheap","basic"] }, audience: { persona_name: "CISO / AI Platform Lead", industry: "Enterprise Technology", language_register: "technical" }, visual_style: { image_style: "minimal", icon_style: "outlined" }, logos: { primary: null, dark: null, description: "Purple shield icon with gradient glow, representing AI security" }, sample_backgrounds: [], sample_templates: [], logo_placement: "top-left" },
-  { id: "brand-2", name: "KOAN News", company_name: "KOAN", tagline: "AI News, Distilled", elevator_pitch: "Daily AI intelligence digest.", colors: { primary: "#DC2626", secondary: "#1E293B", accent: "#FBBF24", background: "#0F0F0F", surface: "#1C1C1C", text_heading: "#FFFFFF", text_body: "#B0B0B0" }, gradients: [], typography: { heading_font: "Space Grotesk", body_font: "DM Sans" }, layout: { max_width: "960px", border_radius_sm: "4px", border_radius_md: "8px", border_radius_lg: "16px", nav_style: "solid" }, tone: { descriptors: ["Sharp","Concise","Insightful"], cta_style: "Direct", words_to_use: [], words_to_avoid: [] }, audience: { persona_name: "AI Practitioner", industry: "Technology", language_register: "business" }, visual_style: { image_style: "photographic", icon_style: "filled" }, logos: { primary: null, dark: null, description: "Red bold sans-serif KOAN wordmark on dark background" }, sample_backgrounds: [], sample_templates: [], logo_placement: "top-left" },
+  createDefaultEnkryptBrand(),
+  { id: "brand-2", name: "KOAN News", company_name: "KOAN", tagline: "AI News, Distilled", elevator_pitch: "Daily AI intelligence digest.", primary_as_gradient: false, colors: { primary: "#DC2626", secondary: "#1E293B", accent: "#FBBF24", background: "#0F0F0F", surface: "#1C1C1C", text_heading: "#FFFFFF", text_body: "#B0B0B0" }, gradients: [], typography: { heading_font: "Space Grotesk", body_font: "DM Sans" }, layout: { max_width: "960px", border_radius_sm: "4px", border_radius_md: "8px", border_radius_lg: "16px", nav_style: "solid" }, tone: { descriptors: ["Sharp","Concise","Insightful"], cta_style: "Direct", words_to_use: [], words_to_avoid: [] }, audience: { persona_name: "AI Practitioner", industry: "Technology", language_register: "business" }, visual_style: { image_style: "photographic", icon_style: "filled" }, logos: { primary: null, dark: null, description: "Red bold sans-serif KOAN wordmark on dark background" }, sample_backgrounds: [], sample_templates: [], logo_placement: "top-left" },
 ];
+
+const BRAND_SWATCH_FALLBACK = { primary: "#6C2BD9", secondary: "#14B8A6" };
+function brandGradientCss(brand) {
+  const p = brand?.colors?.primary ?? BRAND_SWATCH_FALLBACK.primary;
+  const s = brand?.colors?.secondary ?? BRAND_SWATCH_FALLBACK.secondary;
+  return `linear-gradient(135deg,${p},${s})`;
+}
+function brandInitial(brand) {
+  const n = brand?.company_name || brand?.name;
+  if (typeof n === "string" && n.length > 0) return n[0];
+  return "?";
+}
 const fieldStyle = { padding: "12px 14px", borderRadius: 10, border: "1px solid rgba(255,255,255,0.08)", background: "rgba(255,255,255,0.04)", color: "#E2E4EA", fontSize: 14, fontFamily: "'DM Sans', sans-serif", outline: "none", width: "100%", boxSizing: "border-box" };
 
 /** Multiselect indices for visual variants; falls back to legacy `selectedIdx`. */
@@ -83,8 +104,11 @@ function timeAgo(iso) {
 function ToastContainer({ toasts }) {
   if (!toasts.length) return null;
   return (<div style={{ position: "fixed", bottom: 24, right: 24, zIndex: 99999, display: "flex", flexDirection: "column", gap: 8, pointerEvents: "none" }}>
-    {toasts.map(t => (<div key={t.id} style={{ padding: "12px 20px", borderRadius: 10, pointerEvents: "auto", background: t.type === "error" ? "rgba(239,68,68,0.15)" : t.type === "success" ? "rgba(52,211,153,0.15)" : t.type === "warning" ? "rgba(245,158,11,0.15)" : "rgba(108,43,217,0.15)", border: `1px solid ${t.type === "error" ? "rgba(239,68,68,0.3)" : t.type === "success" ? "rgba(52,211,153,0.3)" : t.type === "warning" ? "rgba(245,158,11,0.3)" : "rgba(108,43,217,0.3)"}`, color: t.type === "error" ? "#FCA5A5" : t.type === "success" ? "#6EE7B7" : t.type === "warning" ? "#FBBF24" : "#C4B5FD", fontSize: 13, fontFamily: "'DM Sans', sans-serif", backdropFilter: "blur(12px)", boxShadow: "0 8px 32px rgba(0,0,0,0.3)" }}>
-      {t.type === "success" ? "✓ " : t.type === "error" ? "✕ " : t.type === "warning" ? "⚠ " : ""}{t.message}
+    {toasts.map(t => (<div key={t.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "12px 20px", borderRadius: 10, pointerEvents: "auto", background: t.type === "error" ? "rgba(239,68,68,0.15)" : t.type === "success" ? "rgba(52,211,153,0.15)" : t.type === "warning" ? "rgba(245,158,11,0.15)" : "rgba(108,43,217,0.15)", border: `1px solid ${t.type === "error" ? "rgba(239,68,68,0.3)" : t.type === "success" ? "rgba(52,211,153,0.3)" : t.type === "warning" ? "rgba(245,158,11,0.3)" : "rgba(108,43,217,0.3)"}`, color: t.type === "error" ? "#FCA5A5" : t.type === "success" ? "#6EE7B7" : t.type === "warning" ? "#FBBF24" : "#C4B5FD", fontSize: 13, fontFamily: "'DM Sans', sans-serif", backdropFilter: "blur(12px)", boxShadow: "0 8px 32px rgba(0,0,0,0.3)" }}>
+      {t.type === "success" && <StudioLucide name="Check" size={18} color="#6EE7B7" />}
+      {t.type === "error" && <StudioLucide name="X" size={18} color="#FCA5A5" />}
+      {t.type === "warning" && <StudioLucide name="AlertTriangle" size={18} color="#FBBF24" />}
+      <span style={{ flex: 1 }}>{t.message}</span>
     </div>))}
   </div>);
 }
@@ -140,17 +164,26 @@ function ApiKeysModal({ open, onClose, apiKeys, setApiKeys, serverStatus, addToa
   const [local, setLocal] = useState(apiKeys); const [showKey, setShowKey] = useState({});
   useEffect(() => { if (open) setLocal(apiKeys); }, [open, apiKeys]);
   if (!open) return null;
-  const save = () => { setApiKeys(local); try { localStorage.setItem("ce_api_keys", JSON.stringify(local)); } catch {} addToast("API keys saved", "success"); onClose(); };
-  return (<div style={{ position: "fixed", inset: 0, zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'DM Sans', sans-serif" }}><div style={{ position: "absolute", inset: 0, background: "rgba(0,0,0,0.7)", backdropFilter: "blur(8px)" }} onClick={onClose} /><div style={{ position: "relative", width: 560, maxHeight: "90vh", overflowY: "auto", background: "#14151E", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 20, boxShadow: "0 24px 80px rgba(0,0,0,0.6)" }}>
-    <div style={{ padding: "28px 32px 20px", borderBottom: "1px solid rgba(255,255,255,0.06)", display: "flex", alignItems: "center", justifyContent: "space-between" }}><div><h2 style={{ margin: 0, fontSize: 20, fontWeight: 700, color: "#F1F1F4" }}>AI Provider Settings</h2><p style={{ margin: "6px 0 0", fontSize: 13, color: "#6B7084" }}>Keys are stored locally and sent to provider APIs via server routes</p></div><button onClick={onClose} style={{ width: 32, height: 32, borderRadius: 8, border: "1px solid rgba(255,255,255,0.08)", background: "rgba(255,255,255,0.04)", color: "#8B8DA3", cursor: "pointer", fontSize: 16, display: "flex", alignItems: "center", justifyContent: "center" }}>✕</button></div>
+  /** Apply in-modal values to app state + localStorage (same as Save Keys, optional toast). */
+  const persistToApp = (withToast) => {
+    setApiKeys(local);
+    try {
+      localStorage.setItem("ce_api_keys", JSON.stringify(local));
+    } catch {}
+    if (withToast) addToast("API keys saved", "success");
+  };
+  const save = () => { persistToApp(true); onClose(); };
+  const closeOverlay = () => { persistToApp(false); onClose(); };
+  return (<div style={{ position: "fixed", inset: 0, zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'DM Sans', sans-serif" }}><div style={{ position: "absolute", inset: 0, background: "rgba(0,0,0,0.7)", backdropFilter: "blur(8px)" }} onClick={closeOverlay} /><div style={{ position: "relative", width: 560, maxHeight: "90vh", overflowY: "auto", background: "#14151E", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 20, boxShadow: "0 24px 80px rgba(0,0,0,0.6)" }} onClick={(e) => e.stopPropagation()}>
+    <div style={{ padding: "28px 32px 20px", borderBottom: "1px solid rgba(255,255,255,0.06)", display: "flex", alignItems: "center", justifyContent: "space-between" }}><div><h2 style={{ margin: 0, fontSize: 20, fontWeight: 700, color: "#F1F1F4" }}>AI Provider Settings</h2><p style={{ margin: "6px 0 0", fontSize: 13, color: "#6B7084" }}>Keys stay in your browser and are sent on each API request. Close (X) or clicking outside saves your edits; Cancel closes without applying changes.</p></div><button type="button" onClick={closeOverlay} aria-label="Close" style={{ width: 32, height: 32, borderRadius: 8, border: "1px solid rgba(255,255,255,0.08)", background: "rgba(255,255,255,0.04)", color: "#8B8DA3", cursor: "pointer", fontSize: 16, display: "flex", alignItems: "center", justifyContent: "center" }}><StudioLucide name="X" size={18} color="#8B8DA3" /></button></div>
     <div style={{ padding: "24px 32px" }}>{AI_MODELS.map(m => { const hasC = !!local[m.keyField]; const hasS = !!serverStatus[m.id]; return (<div key={m.id} style={{ marginBottom: 20, padding: 18, borderRadius: 14, background: "rgba(255,255,255,0.02)", border: `1px solid ${(hasC || hasS) ? "rgba(52,211,153,0.2)" : "rgba(255,255,255,0.06)"}` }}>
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 14 }}><div style={{ width: 36, height: 36, borderRadius: 9, background: m.color + "20", display: "flex", alignItems: "center", justifyContent: "center" }}><div style={{ width: 10, height: 10, borderRadius: "50%", background: m.color }} /></div><div style={{ flex: 1 }}><div style={{ fontSize: 14, fontWeight: 700, color: "#E2E4EA" }}>{m.name}</div><div style={{ fontSize: 12, color: "#6B7084" }}>{m.provider} · {m.type}</div></div>
-        {hasS && <span style={{ fontSize: 10, fontWeight: 700, padding: "4px 10px", borderRadius: 6, background: "rgba(20,184,166,0.12)", color: "#14B8A6", textTransform: "uppercase" }}>Server ✓</span>}
-        {hasC && <span style={{ fontSize: 10, fontWeight: 700, padding: "4px 10px", borderRadius: 6, background: "rgba(52,211,153,0.12)", color: "#34D399", textTransform: "uppercase" }}>Client ✓</span>}
+        {hasS && <span style={{ fontSize: 10, fontWeight: 700, padding: "4px 10px", borderRadius: 6, background: "rgba(20,184,166,0.12)", color: "#14B8A6", textTransform: "uppercase", display: "inline-flex", alignItems: "center", gap: 4 }}><StudioLucide name="Check" size={12} color="#14B8A6" /> Server</span>}
+        {hasC && <span style={{ fontSize: 10, fontWeight: 700, padding: "4px 10px", borderRadius: 6, background: "rgba(52,211,153,0.12)", color: "#34D399", textTransform: "uppercase", display: "inline-flex", alignItems: "center", gap: 4 }}><StudioLucide name="Check" size={12} color="#34D399" /> Client</span>}
       </div>
       <div style={{ position: "relative" }}><input type={showKey[m.id] ? "text" : "password"} value={local[m.keyField] || ""} onChange={e => setLocal(p => ({ ...p, [m.keyField]: e.target.value }))} placeholder={hasS ? "Server key set — add client override (optional)" : `${m.provider} API key...`} style={{ ...fieldStyle, paddingRight: 80, fontSize: 13, fontFamily: "'JetBrains Mono',monospace" }} /><button onClick={() => setShowKey(p => ({ ...p, [m.id]: !p[m.id] }))} style={{ position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)", padding: "4px 10px", borderRadius: 6, border: "none", background: "rgba(255,255,255,0.06)", color: "#8B8DA3", fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>{showKey[m.id] ? "Hide" : "Show"}</button></div>
     </div>); })}</div>
-    <div style={{ padding: "16px 32px 24px", display: "flex", gap: 10, justifyContent: "flex-end", borderTop: "1px solid rgba(255,255,255,0.06)" }}><button onClick={onClose} style={{ padding: "10px 20px", borderRadius: 9, border: "1px solid rgba(255,255,255,0.08)", background: "transparent", color: "#8B8DA3", fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>Cancel</button><button onClick={save} style={{ padding: "10px 24px", borderRadius: 9, border: "none", background: "linear-gradient(135deg,#6C2BD9,#5B21B6)", color: "white", fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>Save Keys</button></div>
+    <div style={{ padding: "16px 32px 24px", display: "flex", gap: 10, justifyContent: "flex-end", borderTop: "1px solid rgba(255,255,255,0.06)" }}><button type="button" onClick={() => { setLocal(apiKeys); onClose(); }} style={{ padding: "10px 20px", borderRadius: 9, border: "1px solid rgba(255,255,255,0.08)", background: "transparent", color: "#8B8DA3", fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>Cancel</button><button type="button" onClick={save} style={{ padding: "10px 24px", borderRadius: 9, border: "none", background: "linear-gradient(135deg,#6C2BD9,#5B21B6)", color: "white", fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>Save Keys</button></div>
   </div></div>);
 }
 
@@ -171,7 +204,7 @@ function mdToHtml(text) {
 
 function ExportModal({ open, onClose, activeChannels, currentBundle, addToast, activeBrand }) {
   if (!open) return null;
-  const formats = { linkedin: [{ label: "Copy Text", icon: "📋", act: "copy" }, { label: "Download Markdown", icon: "📝", act: "md" }], twitter: [{ label: "Copy Tweet", icon: "📋", act: "copy" }], blog: [{ label: "Download Markdown", icon: "📝", act: "md" }, { label: "Download HTML", icon: "🌐", act: "html" }, { label: "Copy Text", icon: "📋", act: "copy" }], article: [{ label: "Download Markdown", icon: "📝", act: "md" }, { label: "Download HTML", icon: "🌐", act: "html" }, { label: "Copy Text", icon: "📋", act: "copy" }], landing: [{ label: "Download Animated HTML", icon: "🌐", act: "html" }, { label: "Open Preview in Browser", icon: "🚀", act: "preview" }, { label: "Copy Source", icon: "📋", act: "copy" }] };
+  const formats = { linkedin: [{ label: "Copy Text", lucide: "Copy", act: "copy" }, { label: "Download Markdown", lucide: "FileText", act: "md" }], twitter: [{ label: "Copy Tweet", lucide: "Copy", act: "copy" }], blog: [{ label: "Download Markdown", lucide: "FileText", act: "md" }, { label: "Download HTML", lucide: "Globe", act: "html" }, { label: "Copy Text", lucide: "Copy", act: "copy" }], article: [{ label: "Download Markdown", lucide: "FileText", act: "md" }, { label: "Download HTML", lucide: "Globe", act: "html" }, { label: "Copy Text", lucide: "Copy", act: "copy" }], landing: [{ label: "Download Animated HTML", lucide: "Globe", act: "html" }, { label: "Open Preview in Browser", lucide: "ExternalLink", act: "preview" }, { label: "Copy Source", lucide: "Copy", act: "copy" }] };
   const doExport = (chId, act) => {
     const d = currentBundle?.[chId]; if (!d?.textVariants?.length) { addToast("No content to export", "warning"); return; }
     const text = d.textVariants[d.selectedTextIdx]?.text || ""; const ch = CHANNELS.find(c => c.id === chId);
@@ -203,47 +236,123 @@ function ExportModal({ open, onClose, activeChannels, currentBundle, addToast, a
     }
   };
   return (<div style={{ position: "fixed", inset: 0, zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'DM Sans', sans-serif" }}><div style={{ position: "absolute", inset: 0, background: "rgba(0,0,0,0.7)", backdropFilter: "blur(8px)" }} onClick={onClose} /><div style={{ position: "relative", width: 520, maxHeight: "85vh", overflowY: "auto", background: "#14151E", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 20, boxShadow: "0 24px 80px rgba(0,0,0,0.6)" }}>
-    <div style={{ padding: "28px 32px 20px", borderBottom: "1px solid rgba(255,255,255,0.06)", display: "flex", alignItems: "center", justifyContent: "space-between" }}><div><h2 style={{ margin: 0, fontSize: 20, fontWeight: 700, color: "#F1F1F4" }}>Export Content</h2><p style={{ margin: "6px 0 0", fontSize: 13, color: "#6B7084" }}>Download or copy your generated content</p></div><button onClick={onClose} style={{ width: 32, height: 32, borderRadius: 8, border: "1px solid rgba(255,255,255,0.08)", background: "rgba(255,255,255,0.04)", color: "#8B8DA3", cursor: "pointer", fontSize: 16, display: "flex", alignItems: "center", justifyContent: "center" }}>✕</button></div>
+    <div style={{ padding: "28px 32px 20px", borderBottom: "1px solid rgba(255,255,255,0.06)", display: "flex", alignItems: "center", justifyContent: "space-between" }}><div><h2 style={{ margin: 0, fontSize: 20, fontWeight: 700, color: "#F1F1F4" }}>Export Content</h2><p style={{ margin: "6px 0 0", fontSize: 13, color: "#6B7084" }}>Download or copy your generated content</p></div><button type="button" aria-label="Close" onClick={onClose} style={{ width: 32, height: 32, borderRadius: 8, border: "1px solid rgba(255,255,255,0.08)", background: "rgba(255,255,255,0.04)", color: "#8B8DA3", cursor: "pointer", fontSize: 16, display: "flex", alignItems: "center", justifyContent: "center" }}><StudioLucide name="X" size={18} color="#8B8DA3" /></button></div>
     <div style={{ padding: "20px 32px 28px" }}>{activeChannels.map(chId => { const ch = CHANNELS.find(c => c.id === chId); const fmts = formats[chId] || []; const has = !!currentBundle?.[chId]?.textVariants?.length; return (<div key={chId} style={{ marginBottom: 20 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}><span style={{ width: 20, height: 20, borderRadius: 5, fontSize: 10, fontWeight: 800, display: "flex", alignItems: "center", justifyContent: "center", background: ch.color, color: "white" }}>{ch.icon}</span><span style={{ fontSize: 14, fontWeight: 600, color: "#E2E4EA" }}>{ch.label}</span>{!has && <span style={{ fontSize: 11, color: "#52556B", fontStyle: "italic" }}>No content yet</span>}</div>
-      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>{fmts.map(f => (<button key={f.label} onClick={() => doExport(chId, f.act)} disabled={!has} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 16px", borderRadius: 10, border: "1px solid rgba(255,255,255,0.06)", background: "rgba(255,255,255,0.02)", cursor: has ? "pointer" : "default", fontFamily: "inherit", textAlign: "left", width: "100%", opacity: has ? 1 : 0.4, transition: "all 0.15s" }} onMouseEnter={e => { if (has) { e.currentTarget.style.background = "rgba(255,255,255,0.05)"; e.currentTarget.style.borderColor = "rgba(108,43,217,0.3)"; } }} onMouseLeave={e => { e.currentTarget.style.background = "rgba(255,255,255,0.02)"; e.currentTarget.style.borderColor = "rgba(255,255,255,0.06)"; }}><span style={{ fontSize: 18 }}>{f.icon}</span><div style={{ fontSize: 13, fontWeight: 600, color: "#E2E4EA" }}>{f.label}</div><span style={{ marginLeft: "auto", fontSize: 11, color: "#6B7084" }}>→</span></button>))}</div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>{fmts.map(f => (<button key={f.label} type="button" onClick={() => doExport(chId, f.act)} disabled={!has} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 16px", borderRadius: 10, border: "1px solid rgba(255,255,255,0.06)", background: "rgba(255,255,255,0.02)", cursor: has ? "pointer" : "default", fontFamily: "inherit", textAlign: "left", width: "100%", opacity: has ? 1 : 0.4, transition: "all 0.15s" }} onMouseEnter={e => { if (has) { e.currentTarget.style.background = "rgba(255,255,255,0.05)"; e.currentTarget.style.borderColor = "rgba(108,43,217,0.3)"; } }} onMouseLeave={e => { e.currentTarget.style.background = "rgba(255,255,255,0.02)"; e.currentTarget.style.borderColor = "rgba(255,255,255,0.06)"; }}><StudioLucide name={f.lucide} size={18} color="#C4B5FD" /><div style={{ fontSize: 13, fontWeight: 600, color: "#E2E4EA" }}>{f.label}</div><span style={{ marginLeft: "auto", display: "flex", alignItems: "center" }}><StudioLucide name="ChevronRight" size={16} color="#6B7084" /></span></button>))}</div>
     </div>); })}</div>
   </div></div>);
 }
 
 // ─── Brand Editor ───────────────────────────────────────────────────────
 function BrandEditor({ open, onClose, onSave, editBrand }) {
-  const empty = { id: "", name: "", company_name: "", tagline: "", elevator_pitch: "", colors: { primary: "#6C2BD9", secondary: "#14B8A6", accent: "#F59E0B", background: "#0C0D14", surface: "#1A1B23", text_heading: "#F1F1F4", text_body: "#C4C6D0" }, gradients: [], typography: { heading_font: "DM Sans", body_font: "DM Sans" }, layout: { max_width: "1200px", border_radius_sm: "6px", border_radius_md: "12px", border_radius_lg: "20px", nav_style: "sticky" }, tone: { descriptors: [], cta_style: "", words_to_use: [], words_to_avoid: [] }, audience: { persona_name: "", industry: "", language_register: "business" }, visual_style: { image_style: "minimal", icon_style: "outlined" }, logos: { primary: null, dark: null, description: "" }, sample_backgrounds: [], sample_templates: [], logo_placement: "top-left" };
-  const [b, setB] = useState(empty); const [sec, setSec] = useState("basics"); const [tagInput, setTagInput] = useState({ tone: "", use: "", avoid: "" });
-  useEffect(() => { if (open) { if (editBrand) { const m = JSON.parse(JSON.stringify(empty)); Object.keys(editBrand).forEach(k => { if (typeof editBrand[k] === "object" && editBrand[k] !== null && !Array.isArray(editBrand[k])) { m[k] = { ...m[k], ...editBrand[k] }; } else { m[k] = editBrand[k]; } }); setB(m); } else { setB(JSON.parse(JSON.stringify(empty))); } setSec("basics"); } }, [open]);
+  const emptyBrandTemplate = useMemo(() => createBrandEditorEmptyDefaults(), []);
+  const [b, setB] = useState(emptyBrandTemplate); const [sec, setSec] = useState("basics"); const [tagInput, setTagInput] = useState({ tone: "", use: "", avoid: "" });
+  useEffect(() => {
+    if (!open) return;
+    if (editBrand) {
+      let m;
+      if (isEnkryptStudioBrand(editBrand)) {
+        m = hydrateEnkryptBrandForEditor(editBrand);
+      } else {
+        m = JSON.parse(JSON.stringify(emptyBrandTemplate));
+        Object.keys(editBrand).forEach((k) => {
+          if (typeof editBrand[k] === "object" && editBrand[k] !== null && !Array.isArray(editBrand[k])) {
+            m[k] = { ...m[k], ...editBrand[k] };
+          } else {
+            m[k] = editBrand[k];
+          }
+        });
+      }
+      if (typeof m.primary_as_gradient !== "boolean") {
+        m.primary_as_gradient = !!(editBrand.gradients?.length && editBrand.gradients[0]?.stops?.length >= 2);
+      }
+      if (!m.gradients?.length) {
+        m.gradients = [{ name: "Brand", type: "linear", angle: 90, stops: [{ color: m.colors.primary, position: 0 }, { color: m.colors.secondary, position: 100 }] }];
+      }
+      setB(m);
+    } else {
+      setB(JSON.parse(JSON.stringify(emptyBrandTemplate)));
+    }
+    setSec("basics");
+  }, [open, editBrand, emptyBrandTemplate]);
   if (!open) return null;
   const set = (path, val) => { setB(prev => { const n = JSON.parse(JSON.stringify(prev)); const p = path.split("."); let o = n; for (let i = 0; i < p.length - 1; i++) o = o[p[i]]; o[p[p.length - 1]] = val; return n; }); };
+  const brandGradientCss = (() => {
+    const g = b.gradients?.[0];
+    if (g?.type === "linear" && Array.isArray(g.stops) && g.stops.length >= 2) {
+      const a = typeof g.angle === "number" ? g.angle : 90;
+      const s0 = g.stops[0]; const s1 = g.stops[1];
+      const c0 = s0?.color || b.colors.primary; const c1 = s1?.color || b.colors.secondary;
+      const p0 = typeof s0?.position === "number" ? s0.position : 0; const p1 = typeof s1?.position === "number" ? s1.position : 100;
+      return `linear-gradient(${a}deg, ${c0} ${p0}%, ${c1} ${p1}%)`;
+    }
+    return `linear-gradient(90deg, ${b.colors.primary}, ${b.colors.secondary})`;
+  })();
+  const setGradientStop = (idx, hex) => {
+    setB((prev) => {
+      const n = JSON.parse(JSON.stringify(prev));
+      let gg = n.gradients?.[0];
+      if (!gg || gg.type !== "linear") gg = { name: "Brand", type: "linear", angle: 90, stops: [{ color: n.colors.primary, position: 0 }, { color: n.colors.secondary, position: 100 }] };
+      const stops = Array.isArray(gg.stops) ? [...gg.stops] : [];
+      while (stops.length < 2) stops.push({ color: idx === 0 ? n.colors.primary : n.colors.secondary, position: stops.length * 100 });
+      stops[idx] = { ...stops[idx], color: hex, position: idx === 0 ? 0 : 100 };
+      n.gradients = [{ ...gg, stops }];
+      if (idx === 0) n.colors.primary = hex;
+      if (idx === 1) n.colors.secondary = hex;
+      return n;
+    });
+  };
+  const setGradientAngle = (angle) => {
+    setB((prev) => {
+      const n = JSON.parse(JSON.stringify(prev));
+      const cur = n.gradients?.[0] || { name: "Brand", type: "linear", angle: 90, stops: [{ color: n.colors.primary, position: 0 }, { color: n.colors.secondary, position: 100 }] };
+      n.gradients = [{ ...cur, type: "linear", angle }];
+      return n;
+    });
+  };
+  const setPrimaryAsGradient = (on) => {
+    setB((prev) => {
+      const n = JSON.parse(JSON.stringify(prev));
+      n.primary_as_gradient = on;
+      if (on) {
+        const gg = n.gradients?.[0];
+        const angle = typeof gg?.angle === "number" ? gg.angle : 90;
+        n.gradients = [{ name: gg?.name || "Brand", type: "linear", angle, stops: [{ color: n.colors.primary, position: 0 }, { color: n.colors.secondary, position: 100 }] }];
+      }
+      return n;
+    });
+  };
+  const primaryAsGradient = b.primary_as_gradient !== false;
+  const previewPrimaryFill = primaryAsGradient ? brandGradientCss : b.colors.primary;
   const save = () => { if (!b.name || !b.company_name) return; onSave({ ...b, id: b.id || "brand-" + Date.now() }); onClose(); };
-  const sections = [{ id: "basics", label: "Basics", icon: "✦" }, { id: "colors", label: "Colors", icon: "🎨" }, { id: "typography", label: "Type", icon: "Aa" }, { id: "tone", label: "Tone", icon: "🎭" }, { id: "audience", label: "Audience", icon: "👥" }, { id: "visual", label: "Visual", icon: "🖼" }, { id: "assets", label: "Assets", icon: "📎" }];
+  const sections = [{ id: "basics", label: "Basics", lucide: "Sparkles" }, { id: "colors", label: "Colors", lucide: "Palette" }, { id: "typography", label: "Type", lucide: "Type" }, { id: "tone", label: "Tone", lucide: "Theater" }, { id: "audience", label: "Audience", lucide: "Users" }, { id: "visual", label: "Visual", lucide: "Image" }, { id: "assets", label: "Assets", lucide: "Paperclip" }];
   const CInput = ({ label, value, onChange }) => (<div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}><div style={{ position: "relative", width: 36, height: 36, borderRadius: 8, border: "1px solid rgba(255,255,255,0.1)", overflow: "hidden", flexShrink: 0 }}><input type="color" value={value} onChange={e => onChange(e.target.value)} style={{ position: "absolute", inset: -8, width: 52, height: 52, cursor: "pointer", border: "none" }} /></div><div style={{ flex: 1 }}><div style={{ fontSize: 11, color: "#6B7084", marginBottom: 2 }}>{label}</div><input value={value} onChange={e => onChange(e.target.value)} style={{ ...fieldStyle, padding: "6px 10px", fontSize: 12, fontFamily: "'JetBrains Mono',monospace" }} /></div></div>);
   const Tags = ({ items, onAdd, onRemove, placeholder, stateKey }) => (<div><div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: items.length ? 8 : 0 }}>{items.map((t, i) => (<span key={i} style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, padding: "4px 10px", borderRadius: 6, background: "rgba(108,43,217,0.12)", color: "#C4B5FD" }}>{t}<span onClick={() => onRemove(i)} style={{ cursor: "pointer", opacity: 0.6, fontSize: 14 }}>×</span></span>))}</div><div style={{ display: "flex", gap: 6 }}><input value={tagInput[stateKey]} onChange={e => setTagInput(p => ({ ...p, [stateKey]: e.target.value }))} placeholder={placeholder} onKeyDown={e => { if (e.key === "Enter" && tagInput[stateKey].trim()) { onAdd(tagInput[stateKey].trim()); setTagInput(p => ({ ...p, [stateKey]: "" })); } }} style={{ ...fieldStyle, padding: "8px 12px", fontSize: 13, flex: 1 }} /><button onClick={() => { if (tagInput[stateKey].trim()) { onAdd(tagInput[stateKey].trim()); setTagInput(p => ({ ...p, [stateKey]: "" })); } }} style={{ padding: "8px 14px", borderRadius: 10, border: "none", background: "rgba(108,43,217,0.15)", color: "#C4B5FD", fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>Add</button></div></div>);
   const lbl = { fontSize: 12, fontWeight: 600, color: "#8B8DA3", marginBottom: 6, display: "block" }; const secT = { fontSize: 11, fontWeight: 700, color: "#52556B", textTransform: "uppercase", letterSpacing: "0.8px", marginBottom: 12, marginTop: 24 };
   return (<div style={{ position: "fixed", inset: 0, zIndex: 9999, display: "flex", justifyContent: "flex-end", fontFamily: "'DM Sans', sans-serif" }}><div style={{ position: "absolute", inset: 0, background: "rgba(0,0,0,0.6)", backdropFilter: "blur(6px)" }} onClick={onClose} /><div style={{ position: "relative", width: 640, height: "100%", background: "#11121A", borderLeft: "1px solid rgba(255,255,255,0.08)", display: "flex", flexDirection: "column", boxShadow: "-20px 0 60px rgba(0,0,0,0.4)" }}>
-    <div style={{ padding: "24px 28px 18px", borderBottom: "1px solid rgba(255,255,255,0.06)", display: "flex", alignItems: "center", justifyContent: "space-between", flexShrink: 0 }}><div><h2 style={{ margin: 0, fontSize: 18, fontWeight: 700, color: "#F1F1F4" }}>{editBrand ? "Edit Brand" : "New Brand"}</h2></div><button onClick={onClose} style={{ width: 32, height: 32, borderRadius: 8, border: "1px solid rgba(255,255,255,0.08)", background: "rgba(255,255,255,0.04)", color: "#8B8DA3", cursor: "pointer", fontSize: 16, display: "flex", alignItems: "center", justifyContent: "center" }}>✕</button></div>
-    <div style={{ display: "flex", gap: 2, padding: "10px 20px 0", borderBottom: "1px solid rgba(255,255,255,0.06)", overflowX: "auto", flexShrink: 0 }}>{sections.map(s => (<button key={s.id} onClick={() => setSec(s.id)} style={{ padding: "8px 12px", border: "none", cursor: "pointer", fontSize: 11, fontWeight: 600, fontFamily: "inherit", whiteSpace: "nowrap", display: "flex", alignItems: "center", gap: 5, background: "transparent", color: sec === s.id ? "#E2E4EA" : "#6B7084", borderBottom: sec === s.id ? "2px solid #6C2BD9" : "2px solid transparent", borderRadius: 0 }}><span style={{ fontSize: 13 }}>{s.icon}</span> {s.label}</button>))}</div>
+    <div style={{ padding: "24px 28px 18px", borderBottom: "1px solid rgba(255,255,255,0.06)", display: "flex", alignItems: "center", justifyContent: "space-between", flexShrink: 0 }}><div><h2 style={{ margin: 0, fontSize: 18, fontWeight: 700, color: "#F1F1F4" }}>{editBrand ? "Edit Brand" : "New Brand"}</h2>{editBrand && isEnkryptStudioBrand(editBrand) && <p style={{ margin: "6px 0 0", fontSize: 11, color: "#6B7084", lineHeight: 1.45, maxWidth: 420 }}>Defaults from <code style={{ color: "#8B8DA3" }}>lib/brand/enkrypt-defaults.js</code> (designer + enkrypt-frontend-design). Empty fields were filled; save to persist logos and copy to your device.</p>}</div><button type="button" aria-label="Close" onClick={onClose} style={{ width: 32, height: 32, borderRadius: 8, border: "1px solid rgba(255,255,255,0.08)", background: "rgba(255,255,255,0.04)", color: "#8B8DA3", cursor: "pointer", fontSize: 16, display: "flex", alignItems: "center", justifyContent: "center" }}><StudioLucide name="X" size={18} color="#8B8DA3" /></button></div>
+    <div style={{ display: "flex", gap: 2, padding: "10px 20px 0", borderBottom: "1px solid rgba(255,255,255,0.06)", overflowX: "auto", flexShrink: 0 }}>{sections.map(s => (<button key={s.id} type="button" onClick={() => setSec(s.id)} style={{ padding: "8px 12px", border: "none", cursor: "pointer", fontSize: 11, fontWeight: 600, fontFamily: "inherit", whiteSpace: "nowrap", display: "flex", alignItems: "center", gap: 5, background: "transparent", color: sec === s.id ? "#E2E4EA" : "#6B7084", borderBottom: sec === s.id ? "2px solid #6C2BD9" : "2px solid transparent", borderRadius: 0 }}><StudioLucide name={s.lucide} size={14} color={sec === s.id ? "#E2E4EA" : "#6B7084"} /> {s.label}</button>))}</div>
     <div style={{ flex: 1, overflowY: "auto", padding: "24px 28px" }}>
       {sec === "basics" && <div><label style={lbl}>Brand Name *</label><input value={b.name} onChange={e => set("name", e.target.value)} placeholder="e.g. Enkrypt AI" style={{ ...fieldStyle, marginBottom: 16 }} /><label style={lbl}>Company *</label><input value={b.company_name} onChange={e => set("company_name", e.target.value)} placeholder="Company" style={{ ...fieldStyle, marginBottom: 16 }} /><label style={lbl}>Tagline</label><input value={b.tagline} onChange={e => set("tagline", e.target.value)} placeholder="Tagline" style={{ ...fieldStyle, marginBottom: 16 }} /><label style={lbl}>Elevator Pitch</label><textarea value={b.elevator_pitch} onChange={e => set("elevator_pitch", e.target.value)} placeholder="1-2 sentences..." rows={3} style={{ ...fieldStyle, resize: "vertical" }} /></div>}
-      {sec === "colors" && <div><div style={secT}>Brand Colors</div><div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "4px 16px" }}><CInput label="Primary" value={b.colors.primary} onChange={v => set("colors.primary", v)} /><CInput label="Secondary" value={b.colors.secondary} onChange={v => set("colors.secondary", v)} /><CInput label="Accent" value={b.colors.accent} onChange={v => set("colors.accent", v)} /><CInput label="Background" value={b.colors.background} onChange={v => set("colors.background", v)} /><CInput label="Surface" value={b.colors.surface} onChange={v => set("colors.surface", v)} /><CInput label="Heading" value={b.colors.text_heading} onChange={v => set("colors.text_heading", v)} /><CInput label="Body" value={b.colors.text_body} onChange={v => set("colors.text_body", v)} /></div><div style={secT}>Preview</div><div style={{ borderRadius: 14, overflow: "hidden", border: "1px solid rgba(255,255,255,0.06)" }}><div style={{ padding: 24, background: b.colors.background }}><div style={{ height: 8, width: "60%", borderRadius: 4, background: `linear-gradient(90deg,${b.colors.primary},${b.colors.secondary})`, marginBottom: 16 }} /><div style={{ fontSize: 18, fontWeight: 700, color: b.colors.text_heading, marginBottom: 6 }}>Heading</div><div style={{ fontSize: 13, color: b.colors.text_body, marginBottom: 16, lineHeight: 1.6 }}>Body text preview.</div><div style={{ display: "flex", gap: 8 }}><div style={{ padding: "8px 18px", borderRadius: 8, background: b.colors.primary, color: "white", fontSize: 13, fontWeight: 600 }}>CTA</div></div></div></div></div>}
+      {sec === "colors" && <div><div style={secT}>Primary treatment</div><div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 16, flexWrap: "wrap" }}><span style={{ fontSize: 12, color: "#8B8DA3", fontWeight: 600 }}>Marketing primary</span><div style={{ display: "inline-flex", borderRadius: 10, border: "1px solid rgba(255,255,255,0.08)", overflow: "hidden" }}><button type="button" onClick={() => setPrimaryAsGradient(false)} style={{ padding: "8px 16px", border: "none", cursor: "pointer", fontFamily: "inherit", fontSize: 12, fontWeight: 600, background: !primaryAsGradient ? "rgba(108,43,217,0.15)" : "transparent", color: !primaryAsGradient ? "#C4B5FD" : "#6B7084" }}>Solid</button><button type="button" onClick={() => setPrimaryAsGradient(true)} style={{ padding: "8px 16px", border: "none", cursor: "pointer", fontFamily: "inherit", fontSize: 12, fontWeight: 600, borderLeft: "1px solid rgba(255,255,255,0.08)", background: primaryAsGradient ? "rgba(108,43,217,0.15)" : "transparent", color: primaryAsGradient ? "#C4B5FD" : "#6B7084" }}>Gradient</button></div></div>{primaryAsGradient ? <><div style={secT}>Brand gradient (primary)</div><div style={{ fontSize: 11, color: "#6B7084", marginBottom: 12, lineHeight: 1.5 }}>Your marketing primary is this linear gradient (e.g. Enkrypt orange → pink). Start and end stay in sync with <strong style={{ color: "#8B8DA3" }}>primary</strong> / <strong style={{ color: "#8B8DA3" }}>secondary</strong> for prompts and exports.</div><div style={{ height: 44, borderRadius: 12, marginBottom: 16, border: "1px solid rgba(255,255,255,0.12)", background: brandGradientCss, boxShadow: "inset 0 1px 0 rgba(255,255,255,0.06)" }} /><div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "4px 16px", marginBottom: 8 }}><CInput label="Gradient start → primary" value={b.colors.primary} onChange={v => setGradientStop(0, v)} /><CInput label="Gradient end → secondary" value={b.colors.secondary} onChange={v => setGradientStop(1, v)} /></div><label style={{ ...lbl, marginTop: 4 }}>Gradient angle</label><div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 20 }}>{[{ a: 90, l: "→" }, { a: 135, l: "↘" }, { a: 180, l: "↓" }, { a: 45, l: "↗" }].map(({ a, l }) => (<button key={a} type="button" onClick={() => setGradientAngle(a)} style={{ padding: "8px 14px", borderRadius: 8, border: (b.gradients?.[0]?.angle ?? 90) === a ? "1px solid rgba(108,43,217,0.5)" : "1px solid rgba(255,255,255,0.08)", background: (b.gradients?.[0]?.angle ?? 90) === a ? "rgba(108,43,217,0.12)" : "rgba(255,255,255,0.03)", color: (b.gradients?.[0]?.angle ?? 90) === a ? "#C4B5FD" : "#6B7084", fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>{l} {a}°</button>))}</div></> : <><div style={secT}>Primary & secondary (solids)</div><div style={{ fontSize: 11, color: "#6B7084", marginBottom: 16, lineHeight: 1.5 }}>Primary is a solid brand color (CTAs, key emphasis). Secondary is separate — do not treat the pair as one gradient unless you switch to Gradient above.</div><div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "4px 16px", marginBottom: 20 }}><CInput label="Primary" value={b.colors.primary} onChange={v => set("colors.primary", v)} /><CInput label="Secondary" value={b.colors.secondary} onChange={v => set("colors.secondary", v)} /></div></>}<div style={secT}>Other colors</div><div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "4px 16px" }}><CInput label="Accent" value={b.colors.accent} onChange={v => set("colors.accent", v)} /><CInput label="Background" value={b.colors.background} onChange={v => set("colors.background", v)} /><CInput label="Surface" value={b.colors.surface} onChange={v => set("colors.surface", v)} /><CInput label="Heading" value={b.colors.text_heading} onChange={v => set("colors.text_heading", v)} /><CInput label="Body" value={b.colors.text_body} onChange={v => set("colors.text_body", v)} /></div><div style={secT}>Preview</div><div style={{ borderRadius: 14, overflow: "hidden", border: "1px solid rgba(255,255,255,0.06)" }}><div style={{ padding: 24, background: b.colors.background }}><div style={{ height: 10, width: "65%", borderRadius: 5, background: previewPrimaryFill, marginBottom: 16 }} /><div style={{ fontSize: 18, fontWeight: 700, color: b.colors.text_heading, marginBottom: 6 }}>Heading</div><div style={{ fontSize: 13, color: b.colors.text_body, marginBottom: 16, lineHeight: 1.6 }}>Body text preview.</div><div style={{ display: "flex", gap: 8, alignItems: "center" }}><div style={{ padding: "8px 18px", borderRadius: 8, background: previewPrimaryFill, color: "white", fontSize: 13, fontWeight: 600 }}>CTA</div>{!primaryAsGradient && <div style={{ padding: "8px 14px", borderRadius: 8, border: `1px solid ${b.colors.secondary}`, color: b.colors.secondary, fontSize: 12, fontWeight: 600 }}>Secondary</div>}</div></div></div></div>}
       {sec === "typography" && <div><div style={secT}>Fonts</div><label style={lbl}>Heading</label><select value={b.typography.heading_font} onChange={e => set("typography.heading_font", e.target.value)} style={{ ...fieldStyle, marginBottom: 16, cursor: "pointer" }}>{GOOGLE_FONTS.map(f => <option key={f} value={f} style={{ background: "#1A1B23", color: "#E2E4EA" }}>{f}</option>)}</select><label style={lbl}>Body</label><select value={b.typography.body_font} onChange={e => set("typography.body_font", e.target.value)} style={{ ...fieldStyle, cursor: "pointer" }}>{GOOGLE_FONTS.map(f => <option key={f} value={f} style={{ background: "#1A1B23", color: "#E2E4EA" }}>{f}</option>)}</select></div>}
       {sec === "tone" && <div><div style={secT}>Descriptors</div><Tags items={b.tone.descriptors} onAdd={t => set("tone.descriptors", [...b.tone.descriptors, t])} onRemove={i => set("tone.descriptors", b.tone.descriptors.filter((_, j) => j !== i))} placeholder="e.g. Authoritative..." stateKey="tone" /><div style={{ ...secT, marginTop: 28 }}>CTA Style</div><input value={b.tone.cta_style} onChange={e => set("tone.cta_style", e.target.value)} placeholder="Action-oriented" style={fieldStyle} /><div style={{ ...secT, marginTop: 28 }}>Use</div><Tags items={b.tone.words_to_use || []} onAdd={t => set("tone.words_to_use", [...(b.tone.words_to_use || []), t])} onRemove={i => set("tone.words_to_use", (b.tone.words_to_use || []).filter((_, j) => j !== i))} placeholder="Preferred..." stateKey="use" /><div style={{ ...secT, marginTop: 28 }}>Avoid</div><Tags items={b.tone.words_to_avoid || []} onAdd={t => set("tone.words_to_avoid", [...(b.tone.words_to_avoid || []), t])} onRemove={i => set("tone.words_to_avoid", (b.tone.words_to_avoid || []).filter((_, j) => j !== i))} placeholder="Never use..." stateKey="avoid" /></div>}
       {sec === "audience" && <div><div style={secT}>Target Audience</div><label style={lbl}>Persona</label><input value={b.audience.persona_name} onChange={e => set("audience.persona_name", e.target.value)} placeholder="CISO, VP Eng" style={{ ...fieldStyle, marginBottom: 16 }} /><label style={lbl}>Industry</label><input value={b.audience.industry} onChange={e => set("audience.industry", e.target.value)} placeholder="Enterprise Tech" style={{ ...fieldStyle, marginBottom: 16 }} /><label style={lbl}>Register</label><div style={{ display: "flex", gap: 8 }}>{["technical", "business", "casual"].map(r => (<button key={r} onClick={() => set("audience.language_register", r)} style={{ flex: 1, padding: 10, borderRadius: 10, cursor: "pointer", fontFamily: "inherit", border: b.audience.language_register === r ? "1px solid rgba(108,43,217,0.4)" : "1px solid rgba(255,255,255,0.06)", background: b.audience.language_register === r ? "rgba(108,43,217,0.1)" : "rgba(255,255,255,0.02)", color: b.audience.language_register === r ? "#C4B5FD" : "#6B7084", fontSize: 13, fontWeight: 600, textTransform: "capitalize" }}>{r}</button>))}</div></div>}
-      {sec === "visual" && <div><div style={secT}>Image Style</div><div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 24 }}>{[["photographic", "📷"], ["illustrated", "🎨"], ["abstract", "🌀"], ["minimal", "◻️"]].map(([s, e]) => (<button key={s} onClick={() => set("visual_style.image_style", s)} style={{ padding: 16, borderRadius: 12, cursor: "pointer", fontFamily: "inherit", textAlign: "center", border: b.visual_style.image_style === s ? "1px solid rgba(108,43,217,0.4)" : "1px solid rgba(255,255,255,0.06)", background: b.visual_style.image_style === s ? "rgba(108,43,217,0.1)" : "rgba(255,255,255,0.02)", color: b.visual_style.image_style === s ? "#C4B5FD" : "#6B7084", fontSize: 13, fontWeight: 600 }}><div style={{ fontSize: 24, marginBottom: 4 }}>{e}</div>{s}</button>))}</div></div>}
+      {sec === "visual" && <div><div style={secT}>Image Style</div><div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 24 }}>{[["photographic", "Camera"], ["illustrated", "Palette"], ["abstract", "Layers"], ["minimal", "Square"]].map(([s, lucideName]) => (<button key={s} type="button" onClick={() => set("visual_style.image_style", s)} style={{ padding: 16, borderRadius: 12, cursor: "pointer", fontFamily: "inherit", textAlign: "center", border: b.visual_style.image_style === s ? "1px solid rgba(108,43,217,0.4)" : "1px solid rgba(255,255,255,0.06)", background: b.visual_style.image_style === s ? "rgba(108,43,217,0.1)" : "rgba(255,255,255,0.02)", color: b.visual_style.image_style === s ? "#C4B5FD" : "#6B7084", fontSize: 13, fontWeight: 600 }}><div style={{ display: "flex", justifyContent: "center", marginBottom: 4 }}><StudioLucide name={lucideName} size={24} color={b.visual_style.image_style === s ? "#C4B5FD" : "#6B7084"} /></div>{s}</button>))}</div></div>}
       {sec === "assets" && <div>
-        <div style={secT}>Logo</div>
-        <label style={lbl}>Primary Logo URL</label>
-        <input value={b.logos.primary || ""} onChange={e => set("logos.primary", e.target.value || null)} placeholder="https://example.com/logo.png" style={{ ...fieldStyle, marginBottom: 12, fontSize: 13, fontFamily: "'JetBrains Mono',monospace" }} />
-        <label style={lbl}>Dark Variant Logo URL</label>
-        <input value={b.logos.dark || ""} onChange={e => set("logos.dark", e.target.value || null)} placeholder="https://example.com/logo-dark.png (optional)" style={{ ...fieldStyle, marginBottom: 12, fontSize: 13, fontFamily: "'JetBrains Mono',monospace" }} />
-        <label style={lbl}>Logo Description (for AI image generation)</label>
-        <textarea value={b.logos.description || ""} onChange={e => set("logos.description", e.target.value)} placeholder="Describe the logo so AI can reference it when generating visuals. E.g. 'Purple shield icon with gradient glow, clean sans-serif wordmark below'" rows={2} style={{ ...fieldStyle, resize: "vertical", marginBottom: 12 }} />
+        <div style={secT}>{BRAND_EDITOR_LOGO.sectionTitle}</div>
+        <label style={lbl}>{BRAND_EDITOR_LOGO.primaryLabel}</label>
+        <div style={{ fontSize: 11, color: "#52556B", marginBottom: 8, lineHeight: 1.45 }}>{BRAND_EDITOR_LOGO.primaryHelp}</div>
+        <input value={b.logos.primary || ""} onChange={e => set("logos.primary", e.target.value || null)} placeholder={BRAND_EDITOR_LOGO.urlPlaceholder} style={{ ...fieldStyle, marginBottom: 12, fontSize: 13, fontFamily: "'JetBrains Mono',monospace" }} />
+        <label style={lbl}>{BRAND_EDITOR_LOGO.darkLabel}</label>
+        <div style={{ fontSize: 11, color: "#52556B", marginBottom: 8, lineHeight: 1.45 }}>{BRAND_EDITOR_LOGO.darkHelp}</div>
+        <input value={b.logos.dark || ""} onChange={e => set("logos.dark", e.target.value || null)} placeholder={BRAND_EDITOR_LOGO.urlPlaceholder} style={{ ...fieldStyle, marginBottom: 12, fontSize: 13, fontFamily: "'JetBrains Mono',monospace" }} />
+        <label style={lbl}>{BRAND_EDITOR_LOGO.descriptionLabel}</label>
+        <textarea value={b.logos.description || ""} onChange={e => set("logos.description", e.target.value)} placeholder={BRAND_EDITOR_LOGO.descriptionPlaceholder} rows={2} style={{ ...fieldStyle, resize: "vertical", marginBottom: 12 }} />
         {(b.logos.primary || b.logos.dark) && <div style={{ display: "flex", gap: 12, marginBottom: 16 }}>
-          {b.logos.primary && <div style={{ padding: 12, borderRadius: 10, background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.06)", flex: 1, textAlign: "center" }}><img src={b.logos.primary} alt="Primary" style={{ maxHeight: 48, maxWidth: "100%", objectFit: "contain" }} onError={e => { e.target.style.display = "none"; }} /><div style={{ fontSize: 10, color: "#52556B", marginTop: 6 }}>Primary</div></div>}
-          {b.logos.dark && <div style={{ padding: 12, borderRadius: 10, background: b.colors.background, border: "1px solid rgba(255,255,255,0.06)", flex: 1, textAlign: "center" }}><img src={b.logos.dark} alt="Dark" style={{ maxHeight: 48, maxWidth: "100%", objectFit: "contain" }} onError={e => { e.target.style.display = "none"; }} /><div style={{ fontSize: 10, color: "#52556B", marginTop: 6 }}>Dark</div></div>}
+          {b.logos.primary && <div style={{ padding: 12, borderRadius: 10, background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.06)", flex: 1, textAlign: "center" }}><img src={b.logos.primary} alt="Light surface" style={{ maxHeight: 48, maxWidth: "100%", objectFit: "contain" }} onError={e => { e.target.style.display = "none"; }} /><div style={{ fontSize: 10, color: "#52556B", marginTop: 6 }}>{BRAND_EDITOR_LOGO.previewCaptionPrimary}</div></div>}
+          {b.logos.dark && <div style={{ padding: 12, borderRadius: 10, background: b.colors.background, border: "1px solid rgba(255,255,255,0.06)", flex: 1, textAlign: "center" }}><img src={b.logos.dark} alt="Dark surface" style={{ maxHeight: 48, maxWidth: "100%", objectFit: "contain" }} onError={e => { e.target.style.display = "none"; }} /><div style={{ fontSize: 10, color: "#52556B", marginTop: 6 }}>{BRAND_EDITOR_LOGO.previewCaptionDark}</div></div>}
         </div>}
 
         <label style={lbl}>Logo Placement</label>
@@ -279,7 +388,7 @@ function BrandEditor({ open, onClose, onSave, editBrand }) {
 }
 
 // ─── Generation Output Card ─────────────────────────────────────────────
-function GenerationCard({ bundle, channels, onUpdateBundle, onCopy, onRegenerate, onGenerateImage, onOpenDesigner, isGenerating, activeBrand, designerPostSizeId = "1080x1080-trns", designerWhiteBg = true }) {
+function GenerationCard({ bundle, channels, onUpdateBundle, onCopy, onRegenerate, onGenerateImage, onOpenDesigner, isGenerating, activeBrand, designerPostSizeId = "1080x1080-trns", designerWhiteBg = true, designerHideLogo = false }) {
   const [activeChTab, setActiveChTab] = useState(channels[0]);
   const chData = bundle[activeChTab]; if (!chData) return null;
   const ch = CHANNELS.find(c => c.id === activeChTab);
@@ -300,7 +409,9 @@ function GenerationCard({ bundle, channels, onUpdateBundle, onCopy, onRegenerate
     });
   };
   const currentText = chData.textVariants[chData.selectedTextIdx]?.text || "";
-  const designerThumbLogoUrl = activeBrand?.logos?.primary || activeBrand?.logos?.dark || null;
+  const designerThumbLogoUrl = designerWhiteBg
+    ? (activeBrand?.logos?.primary || activeBrand?.logos?.dark || null)
+    : (activeBrand?.logos?.dark || activeBrand?.logos?.primary || null);
   const pill = (active, color) => ({ padding: "4px 12px", borderRadius: 6, border: "none", cursor: "pointer", fontSize: 11, fontWeight: 700, fontFamily: "inherit", background: active ? (color || "rgba(108,43,217,0.2)") : "rgba(255,255,255,0.04)", color: active ? "white" : "#6B7084" });
   return (<div style={{ borderRadius: 16, border: "1px solid rgba(255,255,255,0.06)", background: "rgba(255,255,255,0.02)", overflow: "hidden" }}>
     <div style={{ display: "flex", gap: 2, padding: "8px 12px", borderBottom: "1px solid rgba(255,255,255,0.06)", background: "rgba(255,255,255,0.02)" }}>
@@ -314,15 +425,15 @@ function GenerationCard({ bundle, channels, onUpdateBundle, onCopy, onRegenerate
         </div>
         <div style={{ padding: "14px 16px", borderRadius: 12, background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)", fontSize: 13, color: "#C4C6D0", lineHeight: 1.7, maxHeight: 200, overflowY: "auto", ...(!["blog","article","landing"].includes(activeChTab) ? { whiteSpace: "pre-wrap" } : {}) }}>{["blog","article","landing"].includes(activeChTab) ? <SimpleMarkdown text={currentText} /> : currentText}</div>
         <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 8 }}>
-          <button onClick={() => onCopy?.(currentText)} style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid rgba(255,255,255,0.06)", background: "rgba(255,255,255,0.02)", color: "#6B7084", fontSize: 11, fontWeight: 500, cursor: "pointer", fontFamily: "inherit" }}>📋 Copy</button>
-          <button onClick={() => onRegenerate?.(activeChTab)} disabled={isGenerating} style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid rgba(255,255,255,0.06)", background: "rgba(255,255,255,0.02)", color: isGenerating ? "#3A3B44" : "#6B7084", fontSize: 11, fontWeight: 500, cursor: isGenerating ? "default" : "pointer", fontFamily: "inherit" }}>{isGenerating ? "⏳" : "🔄"} Regen</button>
+          <button type="button" onClick={() => onCopy?.(currentText)} style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid rgba(255,255,255,0.06)", background: "rgba(255,255,255,0.02)", color: "#6B7084", fontSize: 11, fontWeight: 500, cursor: "pointer", fontFamily: "inherit", display: "inline-flex", alignItems: "center", gap: 5 }}><StudioLucide name="Copy" size={13} color="#6B7084" /> Copy</button>
+          <button type="button" onClick={() => onRegenerate?.(activeChTab)} disabled={isGenerating} style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid rgba(255,255,255,0.06)", background: "rgba(255,255,255,0.02)", color: isGenerating ? "#3A3B44" : "#6B7084", fontSize: 11, fontWeight: 500, cursor: isGenerating ? "default" : "pointer", fontFamily: "inherit", display: "inline-flex", alignItems: "center", gap: 5 }}>{isGenerating ? <StudioLucide name="Loader2" size={13} color="#3A3B44" /> : <StudioLucide name="RefreshCw" size={13} color="#6B7084" />} Regen</button>
           <span style={{ marginLeft: "auto", fontSize: 10, color: "#52556B" }}>{wc(currentText)} words · {cc(currentText)} chars</span>
         </div>
       </div>
       {chData.visualSlots?.length > 0 && <div>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
           <span style={{ fontSize: 11, fontWeight: 700, color: "#52556B", textTransform: "uppercase", letterSpacing: "0.5px" }}>Visuals · {chData.visualSlots.length} slots · multi-select</span>
-          <button onClick={() => onGenerateImage?.(activeChTab)} disabled={isGenerating} style={{ padding: "5px 14px", borderRadius: 7, border: "none", background: isGenerating ? "rgba(255,255,255,0.04)" : "linear-gradient(135deg,rgba(108,43,217,0.3),rgba(20,184,166,0.3))", color: isGenerating ? "#52556B" : "#C4B5FD", fontSize: 11, fontWeight: 600, cursor: isGenerating ? "default" : "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", gap: 6 }} title="Click v1/v2/… to multi-select; generates only checked thumbnails that are still empty">{isGenerating ? "⏳ Generating..." : "🖼 Generate selected"}</button>
+          <button type="button" onClick={() => onGenerateImage?.(activeChTab)} disabled={isGenerating} style={{ padding: "5px 14px", borderRadius: 7, border: "none", background: isGenerating ? "rgba(255,255,255,0.04)" : "linear-gradient(135deg,rgba(108,43,217,0.3),rgba(20,184,166,0.3))", color: isGenerating ? "#52556B" : "#C4B5FD", fontSize: 11, fontWeight: 600, cursor: isGenerating ? "default" : "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", gap: 6 }} title="Click v1/v2/… to multi-select; generates only checked thumbnails that are still empty">{isGenerating ? <><StudioLucide name="Loader2" size={14} color="#52556B" /> Generating...</> : <><StudioLucide name="Image" size={14} color="#C4B5FD" /> Generate selected</>}</button>
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           {chData.visualSlots.map((slot, si) => (<div key={slot.slot} style={{ padding: 12, borderRadius: 12, background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.05)" }}>
@@ -331,14 +442,14 @@ function GenerationCard({ bundle, channels, onUpdateBundle, onCopy, onRegenerate
               const hasImage = !!v.url;
               const picked = getVisualSelectedIndices(slot).includes(vi);
               return (<div key={v.id} title={picked ? "Click to deselect" : "Click to add to selection"} onClick={() => selectVisual(si, vi)} style={{ width: 72, height: 72, borderRadius: 10, cursor: "pointer", overflow: "hidden", background: hasImage ? "transparent" : `linear-gradient(${135 + vi * 30}deg,hsl(${v.hue},40%,25%),hsl(${v.hue + 40},50%,18%))`, border: picked ? `2px solid ${ch?.color}` : "2px solid transparent", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, color: "rgba(255,255,255,0.5)", fontWeight: 600, flexShrink: 0, position: "relative" }}>
-                {hasImage ? <DesignerPreviewThumb imageUrl={v.url} sourceText={currentText} logoUrl={designerThumbLogoUrl} postSizeId={designerPostSizeId} whiteBg={designerWhiteBg} designerContent={v.designerContent} /> : <>v{vi + 1}</>}
-                {picked && <div style={{ position: "absolute", top: 4, right: 4, width: 14, height: 14, borderRadius: "50%", background: ch?.color, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 8, color: "white" }}>✓</div>}
+                {hasImage ? <DesignerPreviewThumb imageUrl={v.url} sourceText={currentText} logoUrl={designerThumbLogoUrl} postSizeId={designerPostSizeId} whiteBg={designerWhiteBg} hideLogo={designerHideLogo} designerContent={v.designerContent} /> : <>v{vi + 1}</>}
+                {picked && <div style={{ position: "absolute", top: 4, right: 4, width: 14, height: 14, borderRadius: "50%", background: ch?.color, display: "flex", alignItems: "center", justifyContent: "center", color: "white" }}><StudioLucide name="Check" size={10} color="white" strokeWidth={3} /></div>}
               </div>);
             })}{(() => {
               const idxs = getVisualSelectedIndices(slot);
               const di = idxs.find((i) => slot.variants[i]?.url);
               return typeof di === "number" ? (
-                <button type="button" onClick={(e) => { e.stopPropagation(); const v = slot.variants[di]; onOpenDesigner?.(v.url, v.designerContent, bundle[activeChTab]?.visualSlots); }} style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid rgba(108,43,217,0.35)", background: "rgba(108,43,217,0.12)", color: "#C4B5FD", fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", marginLeft: 4 }}>🎨 Designer</button>
+                <button type="button" onClick={(e) => { e.stopPropagation(); const v = slot.variants[di]; onOpenDesigner?.(v.url, v.designerContent, bundle[activeChTab]?.visualSlots); }} style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid rgba(108,43,217,0.35)", background: "rgba(108,43,217,0.12)", color: "#C4B5FD", fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", marginLeft: 4, display: "inline-flex", alignItems: "center", gap: 5 }}><StudioLucide name="Palette" size={14} color="#C4B5FD" /> Designer</button>
               ) : null;
             })()}</div>
           </div>))}
@@ -357,65 +468,147 @@ function LeftPanel({ activeTab, setActiveTab, collapsed, brands, activeBrandId, 
   return (<div style={{ width, minWidth: 200, height: "100%", background: "rgba(255,255,255,0.02)", borderRight: "none", display: "flex", flexDirection: "column", overflow: "hidden" }}>
     <div style={{ padding: "16px 16px 12px" }}><button onClick={onNewProject} style={{ width: "100%", padding: 11, borderRadius: 10, border: "1px solid rgba(108,43,217,0.3)", background: "rgba(108,43,217,0.1)", color: "#C4B5FD", fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>+ New Project</button></div>
     <div style={{ display: "flex", margin: "0 16px", padding: 3, borderRadius: 9, background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.04)" }}>{["projects", "templates", "brands"].map(t => (<button key={t} onClick={() => setActiveTab(t)} style={{ flex: 1, padding: "7px 4px", border: "none", borderRadius: 7, cursor: "pointer", fontSize: 11, fontWeight: 600, fontFamily: "inherit", background: activeTab === t ? "rgba(255,255,255,0.08)" : "transparent", color: activeTab === t ? "#E2E4EA" : "#6B7084", textTransform: "capitalize" }}>{t}</button>))}</div>
-    <div style={{ padding: "12px 16px 8px" }}><div style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 12px", borderRadius: 8, background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.06)" }}><span style={{ color: "#6B7084", fontSize: 14 }}>⌕</span><input value={search} onChange={e => setSearch(e.target.value)} placeholder={`Search ${activeTab}...`} style={{ border: "none", background: "transparent", color: "#E2E4EA", fontSize: 13, fontFamily: "inherit", outline: "none", width: "100%" }} /></div></div>
+    <div style={{ padding: "12px 16px 8px" }}><div style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 12px", borderRadius: 8, background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.06)" }}><StudioLucide name="Search" size={16} color="#6B7084" /><input value={search} onChange={e => setSearch(e.target.value)} placeholder={`Search ${activeTab}...`} style={{ border: "none", background: "transparent", color: "#E2E4EA", fontSize: 13, fontFamily: "inherit", outline: "none", width: "100%" }} /></div></div>
     <div style={{ flex: 1, overflowY: "auto", padding: "4px 12px 16px" }}>
       {activeTab === "projects" && projects.map(p => (<div key={p.id} onClick={() => onSelectProject(p.id)} style={{ padding: "12px 14px", borderRadius: 10, cursor: "pointer", background: activeProjectId === p.id ? "rgba(108,43,217,0.1)" : "rgba(255,255,255,0.02)", border: `1px solid ${activeProjectId === p.id ? "rgba(108,43,217,0.3)" : "rgba(255,255,255,0.04)"}`, marginBottom: 6 }} onMouseEnter={e => { if (activeProjectId !== p.id) e.currentTarget.style.background = "rgba(255,255,255,0.05)"; }} onMouseLeave={e => { if (activeProjectId !== p.id) e.currentTarget.style.background = "rgba(255,255,255,0.02)"; }}><div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}><div style={{ fontSize: 13, fontWeight: 600, color: "#E2E4EA", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>{p.title}</div>{p.messageCount > 0 && <span style={{ fontSize: 10, padding: "2px 6px", borderRadius: 4, background: "rgba(255,255,255,0.06)", color: "#6B7084", flexShrink: 0, marginLeft: 8 }}>{p.messageCount}</span>}</div><div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}><div style={{ display: "flex", gap: 4 }}>{(p.channels || []).map(ch => { const c = CHANNELS.find(x => x.id === ch); return c ? <span key={ch} style={{ fontSize: 9, fontWeight: 700, padding: "2px 6px", borderRadius: 4, background: c.color + "20", color: c.color }}>{c.label.split(" ")[0]}</span> : null; })}</div><span style={{ fontSize: 11, color: "#6B7084" }}>{p.updatedAt ? timeAgo(p.updatedAt) : ""}</span></div></div>))}
       {activeTab === "templates" && <div>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginBottom: 12 }}>{cats.map(c => <button key={c} type="button" onClick={() => setTplFilter((prev) => (c !== "All" && prev === c ? "All" : c))} style={{ padding: "5px 10px", borderRadius: 6, border: "none", cursor: "pointer", fontSize: 11, fontWeight: 600, fontFamily: "inherit", background: tplFilter === c ? "rgba(108,43,217,0.2)" : "rgba(255,255,255,0.04)", color: tplFilter === c ? "#C4B5FD" : "#6B7084" }}>{c}</button>)}</div>
         {filtered.map(t => (<div key={t.id} onClick={() => onSelectTemplate(t)} style={{ padding: "12px 14px", borderRadius: 10, cursor: "pointer", background: selectedTemplateId === t.id ? "rgba(108,43,217,0.1)" : "rgba(255,255,255,0.02)", border: `1px solid ${selectedTemplateId === t.id ? "rgba(108,43,217,0.3)" : "rgba(255,255,255,0.04)"}`, marginBottom: 6, transition: "all 0.15s" }} onMouseEnter={e => { if (selectedTemplateId !== t.id) e.currentTarget.style.background = "rgba(255,255,255,0.05)"; }} onMouseLeave={e => { if (selectedTemplateId !== t.id) e.currentTarget.style.background = "rgba(255,255,255,0.02)"; }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}><span style={{ fontSize: 18 }}>{t.icon}</span><span style={{ fontSize: 13, fontWeight: 600, color: "#E2E4EA" }}>{t.name}</span></div>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}><StudioLucide name={t.lucide} size={18} color="#C4B5FD" /><span style={{ fontSize: 13, fontWeight: 600, color: "#E2E4EA" }}>{t.name}</span></div>
           <div style={{ fontSize: 12, color: "#6B7084", marginBottom: 8, lineHeight: 1.4 }}>{t.description}</div>
           <div style={{ display: "flex", gap: 4 }}>{t.channels.map(ch => { const c = CHANNELS.find(x => x.id === ch); return c ? <span key={ch} style={{ fontSize: 9, fontWeight: 700, padding: "2px 6px", borderRadius: 4, background: c.color + "15", color: c.color }}>{c.label.split(" ")[0]}</span> : null; })}</div>
         </div>))}
       </div>}
-      {activeTab === "brands" && <div>{brands.map(brand => (<div key={brand.id} onClick={() => onSelectBrand(brand.id)} style={{ padding: 14, borderRadius: 10, cursor: "pointer", background: brand.id === activeBrandId ? "rgba(108,43,217,0.1)" : "rgba(255,255,255,0.02)", border: `1px solid ${brand.id === activeBrandId ? "rgba(108,43,217,0.3)" : "rgba(255,255,255,0.04)"}`, marginBottom: 6 }}><div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}><div style={{ width: 32, height: 32, borderRadius: 8, background: `linear-gradient(135deg,${brand.colors.primary},${brand.colors.secondary})`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, fontWeight: 800, color: "white" }}>{brand.company_name[0]}</div><div style={{ flex: 1 }}><div style={{ fontSize: 13, fontWeight: 600, color: "#E2E4EA" }}>{brand.name}</div><div style={{ fontSize: 11, color: "#6B7084" }}>{brand.tagline}</div></div><button onClick={e => { e.stopPropagation(); onOpenBrandEditor(brand); }} style={{ width: 28, height: 28, borderRadius: 6, border: "none", background: "rgba(255,255,255,0.06)", color: "#6B7084", cursor: "pointer", fontSize: 12, display: "flex", alignItems: "center", justifyContent: "center" }}>✎</button></div><div style={{ display: "flex", gap: 6, marginBottom: 8 }}>{["primary", "secondary", "accent"].map(k => <div key={k} style={{ display: "flex", alignItems: "center", gap: 4 }}><div style={{ width: 14, height: 14, borderRadius: 3, background: brand.colors[k], border: "1px solid rgba(255,255,255,0.1)" }} /><span style={{ fontSize: 10, color: "#52556B", textTransform: "capitalize" }}>{k}</span></div>)}</div><div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>{brand.tone.descriptors.map(t => <span key={t} style={{ fontSize: 10, padding: "3px 8px", borderRadius: 4, background: "rgba(255,255,255,0.04)", color: "#8B8DA3" }}>{t}</span>)}</div></div>))}<button onClick={() => onOpenBrandEditor(null)} style={{ padding: 14, borderRadius: 10, cursor: "pointer", background: "transparent", border: "1px dashed rgba(255,255,255,0.1)", color: "#6B7084", fontSize: 13, fontWeight: 500, fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center", gap: 8, width: "100%" }} onMouseEnter={e => { e.currentTarget.style.borderColor = "rgba(108,43,217,0.4)"; e.currentTarget.style.color = "#C4B5FD"; }} onMouseLeave={e => { e.currentTarget.style.borderColor = "rgba(255,255,255,0.1)"; e.currentTarget.style.color = "#6B7084"; }}>+ Add Brand</button></div>}
+      {activeTab === "brands" && <div>{brands.map(brand => (<div key={brand.id} onClick={() => onSelectBrand(brand.id)} style={{ padding: 14, borderRadius: 10, cursor: "pointer", background: brand.id === activeBrandId ? "rgba(108,43,217,0.1)" : "rgba(255,255,255,0.02)", border: `1px solid ${brand.id === activeBrandId ? "rgba(108,43,217,0.3)" : "rgba(255,255,255,0.04)"}`, marginBottom: 6 }}><div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}><div style={{ width: 32, height: 32, borderRadius: 8, background: brandGradientCss(brand), display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, fontWeight: 800, color: "white" }}>{brandInitial(brand)}</div><div style={{ flex: 1 }}><div style={{ fontSize: 13, fontWeight: 600, color: "#E2E4EA" }}>{brand.name}</div><div style={{ fontSize: 11, color: "#6B7084" }}>{brand.tagline}</div></div><button type="button" onClick={e => { e.stopPropagation(); onOpenBrandEditor(brand); }} aria-label="Edit brand" style={{ width: 28, height: 28, borderRadius: 6, border: "none", background: "rgba(255,255,255,0.06)", color: "#6B7084", cursor: "pointer", fontSize: 12, display: "flex", alignItems: "center", justifyContent: "center" }}><StudioLucide name="Pencil" size={14} color="#6B7084" /></button></div><div style={{ display: "flex", gap: 6, marginBottom: 8 }}>{["primary", "secondary", "accent"].map(k => <div key={k} style={{ display: "flex", alignItems: "center", gap: 4 }}><div style={{ width: 14, height: 14, borderRadius: 3, background: brand.colors?.[k] ?? "transparent", border: "1px solid rgba(255,255,255,0.1)" }} /><span style={{ fontSize: 10, color: "#52556B", textTransform: "capitalize" }}>{k}</span></div>)}</div><div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>{(brand.tone?.descriptors ?? []).map(t => <span key={t} style={{ fontSize: 10, padding: "3px 8px", borderRadius: 4, background: "rgba(255,255,255,0.04)", color: "#8B8DA3" }}>{t}</span>)}</div></div>))}<button onClick={() => onOpenBrandEditor(null)} style={{ padding: 14, borderRadius: 10, cursor: "pointer", background: "transparent", border: "1px dashed rgba(255,255,255,0.1)", color: "#6B7084", fontSize: 13, fontWeight: 500, fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center", gap: 8, width: "100%" }} onMouseEnter={e => { e.currentTarget.style.borderColor = "rgba(108,43,217,0.4)"; e.currentTarget.style.color = "#C4B5FD"; }} onMouseLeave={e => { e.currentTarget.style.borderColor = "rgba(255,255,255,0.1)"; e.currentTarget.style.color = "#6B7084"; }}>+ Add Brand</button></div>}
     </div>
   </div>);
 }
 
 // ─── Center Panel ───────────────────────────────────────────────────────
-function CenterPanel({ activeChannels, setActiveChannels, linkedinIncludeCarousel, setLinkedinIncludeCarousel, activeBrand, apiKeys, serverStatus, onSelectPreview, messages, setMessages, projectTitle, selectedTemplateId, setSelectedTemplateId, inputMode, setInputMode, tone, setTone, isGenerating, setIsGenerating, generationPhase, setGenerationPhase, addToast, onRegenerate, onGenerateImage, onOpenDesigner, designerPostSizeId, setDesignerPostSizeId, designerWhiteBg, setDesignerWhiteBg, designerThemeId, setDesignerThemeId }) {
+function CenterPanel({ activeChannels, setActiveChannels, linkedinIncludeCarousel, setLinkedinIncludeCarousel, activeBrand, apiKeys, serverStatus, onSelectPreview, messages, setMessages, projectTitle, selectedTemplateId, setSelectedTemplateId, inputMode, setInputMode, tone, setTone, isGenerating, setIsGenerating, generationPhase, setGenerationPhase, addToast, onRegenerate, onGenerateImage, onOpenDesigner, designerPostSizeId, setDesignerPostSizeId, designerWhiteBg, setDesignerWhiteBg, designerThemeId, setDesignerThemeId, designerHideLogo = false }) {
   const [inputValue, setInputValue] = useState("");
+  const [uploadFile, setUploadFile] = useState(null);
   const [numText, setNumText] = useState(3); const [numVisual, setNumVisual] = useState(3); const [welcome, setWelcome] = useState(true);
-  const ref = useRef(null); const endRef = useRef(null);
+  const ref = useRef(null); const endRef = useRef(null); const fileInputRef = useRef(null);
+  const wasLandingOnlyRef = useRef(false);
+  useEffect(() => {
+    const landingOnly = activeChannels.length === 1 && activeChannels[0] === "landing";
+    if (landingOnly && !wasLandingOnlyRef.current) setNumVisual(0);
+    wasLandingOnlyRef.current = landingOnly;
+  }, [activeChannels]);
 
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages, isGenerating]);
   useEffect(() => { setWelcome(messages.length === 0); }, [messages]);
   const selectedTpl = selectedTemplateId ? TEMPLATES.find(t => t.id === selectedTemplateId) : null;
   const cfgModels = AI_MODELS.filter(m => apiKeys[m.keyField] || serverStatus?.[m.id]);
-  const placeholder = selectedTpl?.placeholder || (inputMode === "url" ? "Paste a URL..." : inputMode === "topic" ? "Enter a topic..." : "Write your content brief...");
+  const placeholder = selectedTpl?.placeholder || (inputMode === "url" ? "Paste a URL..." : inputMode === "topic" ? "Enter a topic..." : inputMode === "upload" ? "Optional notes to include with your file (Shift+Enter for newline)..." : "Write your content brief...");
+  const canSend =
+    !isGenerating &&
+    (inputMode === "upload" ? !!uploadFile : !!inputValue.trim());
 
   const send = async () => {
-    if (!inputValue.trim() || isGenerating) return;
+    if (!canSend) return;
     if (activeChannels.length === 0) { addToast("Select at least one channel", "warning"); return; }
 
-    const userMsg = { id: "msg-" + Date.now(), role: "user", content: inputValue, mode: inputMode, tone, channels: [...activeChannels], templateId: selectedTemplateId, numText, numVisual, linkedinIncludeCarousel, createdAt: new Date().toISOString(), time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) };
-    setMessages(p => [...p, userMsg]); setInputValue(""); setIsGenerating(true); setGenerationPhase("text");
+    const rawInput = inputValue.trim();
+    let displayContent = inputMode === "upload"
+      ? `Attachment: ${uploadFile?.name || "file"}${rawInput ? `\n\n${rawInput}` : ""}`
+      : rawInput;
+    let preparedInput = null;
+    let contentInput = inputMode === "upload" ? "" : rawInput;
+
+    const userMsgId = "msg-" + Date.now();
+    const userMsg = {
+      id: userMsgId,
+      role: "user",
+      content: displayContent,
+      mode: inputMode,
+      tone,
+      channels: [...activeChannels],
+      templateId: selectedTemplateId,
+      numText,
+      numVisual,
+      linkedinIncludeCarousel,
+      createdAt: new Date().toISOString(),
+      time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+    };
+    setMessages(p => [...p, userMsg]);
+    if (inputMode !== "upload") setInputValue("");
+    setIsGenerating(true);
 
     try {
-      let contentInput = inputValue;
       if (inputMode === "url") {
         setGenerationPhase("url");
         try {
-          const parsed = await parseUrl(inputValue, apiKeys);
-          contentInput = `Source: ${parsed.title || inputValue}\n\n${parsed.content || parsed.excerpt || ""}`;
-          addToast("URL content extracted", "success");
-        } catch { addToast("URL parsing failed — using raw input", "warning"); }
+          const parsed = await parseUrl(rawInput, apiKeys);
+          const merged = `Source: ${parsed.title || rawInput}\n\n${parsed.content || parsed.excerpt || ""}`;
+          addToast("Article fetched — analyzing for your channels…", "success");
+          setGenerationPhase("prepare");
+          try {
+            const prep = await prepareSourceArticle({
+              title: parsed.title || "",
+              content: merged,
+              channels: activeChannels,
+              templateId: selectedTemplateId || null,
+              willGenerateImages: numVisual > 0,
+              apiKeys,
+            });
+            preparedInput = prep.preparedInput;
+            addToast("Channel-aware brief ready", "success");
+          } catch (e) {
+            preparedInput = merged;
+            addToast(e?.message ? `Brief step skipped: ${e.message}` : "Brief step skipped — using article text", "warning");
+          }
+          contentInput = preparedInput || merged;
+        } catch {
+          addToast("URL fetch failed — using pasted text only", "warning");
+          contentInput = rawInput;
+        }
+        setGenerationPhase("text");
+      } else if (inputMode === "upload") {
+        setGenerationPhase("prepare");
+        const fd = new FormData();
+        fd.append("file", uploadFile);
+        fd.append("channels", JSON.stringify(activeChannels));
+        fd.append("templateId", selectedTemplateId || "");
+        fd.append("willGenerateImages", numVisual > 0 ? "true" : "false");
+        const analyzed = await analyzeUploadedFile(fd, apiKeys);
+        preparedInput = analyzed.preparedInput;
+        contentInput = preparedInput;
+        if (rawInput) {
+          contentInput = `${contentInput}\n\n---\nUser notes:\n${rawInput}`;
+        }
+        const note = analyzed.note ? ` (${analyzed.note})` : "";
+        addToast(`File analyzed${note}`, "success");
+        setUploadFile(null);
+        setInputValue("");
+        if (fileInputRef.current) fileInputRef.current.value = "";
+        setGenerationPhase("text");
+      } else {
+        contentInput = inputMode === "topic" || inputMode === "text" ? rawInput : contentInput;
         setGenerationPhase("text");
       }
+
+      setMessages((p) =>
+        p.map((m) => (m.id === userMsgId ? { ...m, preparedInput: contentInput } : m)),
+      );
 
       const bundle = await generateContentBundle({ input: contentInput, channels: activeChannels, templateId: selectedTemplateId || null, brand: activeBrand || null, numTextVariants: numText, tone, apiKeys });
 
       for (const channelId of activeChannels) {
         if (bundle[channelId]) {
-          const slotNames = getChannelVisualSlotNames(channelId, {
-            includeLinkedinCarousel: linkedinIncludeCarousel,
-          });
-          bundle[channelId].visualSlots = slotNames.map((slotName) => ({
-            slot: slotName,
-            variants: Array.from({ length: numVisual }, (_, j) => ({ id: `vs-${channelId}-${slotName}-${j}`, hue: (channelId.charCodeAt(0) * 37 + j * 60 + slotName.charCodeAt(0) * 13) % 360, prompt: `${activeBrand?.name || "Brand"} ${slotName} v${j + 1}` })),
-            selectedIndices: [0],
-          }));
+          if (numVisual <= 0) {
+            bundle[channelId].visualSlots = [];
+          } else {
+            const slotNames = getChannelVisualSlotNames(channelId, {
+              includeLinkedinCarousel: linkedinIncludeCarousel,
+            });
+            bundle[channelId].visualSlots = slotNames.map((slotName) => ({
+              slot: slotName,
+              variants: Array.from({ length: numVisual }, (_, j) => ({ id: `vs-${channelId}-${slotName}-${j}`, hue: (channelId.charCodeAt(0) * 37 + j * 60 + slotName.charCodeAt(0) * 13) % 360, prompt: `${activeBrand?.name || "Brand"} ${slotName} v${j + 1}` })),
+              selectedIndices: [0],
+            }));
+          }
         }
       }
 
@@ -424,7 +617,7 @@ function CenterPanel({ activeChannels, setActiveChannels, linkedinIncludeCarouse
       if (onSelectPreview && activeChannels.length > 0) { const fc = activeChannels[0]; onSelectPreview({ channel: fc, text: bundle[fc]?.textVariants[0]?.text, visualSlots: bundle[fc]?.visualSlots }); }
       addToast(`Generated for ${activeChannels.length} channel${activeChannels.length > 1 ? "s" : ""}`, "success");
     } catch (error) {
-      setMessages(p => [...p, { id: "msg-" + (Date.now() + 1), role: "error", content: error.message || "Generation failed. Check your API keys in Settings (⚙).", createdAt: new Date().toISOString(), time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) }]);
+      setMessages(p => [...p, { id: "msg-" + (Date.now() + 1), role: "error", content: error.message || "Generation failed. Check your API keys in Settings (gear icon in the top bar).", createdAt: new Date().toISOString(), time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) }]);
       addToast(error.message || "Generation failed", "error");
     } finally { setIsGenerating(false); setGenerationPhase(null); }
   };
@@ -435,30 +628,30 @@ function CenterPanel({ activeChannels, setActiveChannels, linkedinIncludeCarouse
   return (<div style={{ flex: 1, display: "flex", flexDirection: "column", height: "100%", minWidth: 0, minHeight: 0 }}>
     <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "24px 32px", display: "flex", flexDirection: "column" }}>
       {welcome ? (<div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 24, maxWidth: 520, margin: "0 auto", textAlign: "center" }}>
-        <div style={{ width: 64, height: 64, borderRadius: 16, background: "linear-gradient(135deg,rgba(108,43,217,0.2),rgba(20,184,166,0.2))", display: "flex", alignItems: "center", justifyContent: "center", border: "1px solid rgba(108,43,217,0.2)" }}><span style={{ fontSize: 28 }}>✦</span></div>
+        <div style={{ width: 64, height: 64, borderRadius: 16, background: "linear-gradient(135deg,rgba(108,43,217,0.2),rgba(20,184,166,0.2))", display: "flex", alignItems: "center", justifyContent: "center", border: "1px solid rgba(108,43,217,0.2)" }}><StudioLucide name="Sparkles" size={32} color="#C4B5FD" /></div>
         <div><h2 style={{ fontSize: 22, fontWeight: 700, color: "#E2E4EA", margin: "0 0 8px" }}>What would you like to create?</h2><p style={{ fontSize: 14, color: "#6B7084", margin: 0, lineHeight: 1.6 }}>Paste a URL, write a thought, pick a topic, or choose a template from the left panel.</p></div>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, width: "100%", marginTop: 8 }}>
-          {INPUT_MODES.map((m) => (<button key={m.id} type="button" onClick={() => { setInputMode(m.id); ref.current?.focus(); }} style={{ padding: 16, borderRadius: 12, cursor: "pointer", background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)", textAlign: "left", fontFamily: "inherit", color: "#E2E4EA", display: "flex", flexDirection: "column", alignItems: "flex-start" }} onMouseEnter={e => { e.currentTarget.style.background = "rgba(255,255,255,0.06)"; e.currentTarget.style.borderColor = "rgba(108,43,217,0.3)"; }} onMouseLeave={e => { e.currentTarget.style.background = "rgba(255,255,255,0.03)"; e.currentTarget.style.borderColor = "rgba(255,255,255,0.06)"; }}><span style={{ fontSize: 20, marginBottom: 8 }}>{m.emoji}</span><span style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>{m.label}</span><span style={{ fontSize: 11, color: "#6B7084" }}>{m.description}</span></button>))}
+          {INPUT_MODES.map((m) => (<button key={m.id} type="button" onClick={() => { setInputMode(m.id); ref.current?.focus(); }} style={{ padding: 16, borderRadius: 12, cursor: "pointer", background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)", textAlign: "left", fontFamily: "inherit", color: "#E2E4EA", display: "flex", flexDirection: "column", alignItems: "flex-start" }} onMouseEnter={e => { e.currentTarget.style.background = "rgba(255,255,255,0.06)"; e.currentTarget.style.borderColor = "rgba(108,43,217,0.3)"; }} onMouseLeave={e => { e.currentTarget.style.background = "rgba(255,255,255,0.03)"; e.currentTarget.style.borderColor = "rgba(255,255,255,0.06)"; }}><span style={{ display: "flex", marginBottom: 8 }}><StudioLucide name={m.lucide} size={22} color="#C4B5FD" /></span><span style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>{m.label}</span><span style={{ fontSize: 11, color: "#6B7084" }}>{m.description}</span></button>))}
         </div>
-        {cfgModels.length === 0 && <div style={{ padding: "14px 18px", borderRadius: 12, background: "rgba(245,158,11,0.08)", border: "1px solid rgba(245,158,11,0.2)", width: "100%", textAlign: "left" }}><div style={{ fontSize: 13, color: "#FBBF24", fontWeight: 600, marginBottom: 4 }}>⚠ No AI providers configured</div><div style={{ fontSize: 12, color: "#D4A574", lineHeight: 1.5 }}>Click ⚙ in the top bar to add API keys, or set them in .env.local on the server.</div></div>}
+        {cfgModels.length === 0 && <div style={{ padding: "14px 18px", borderRadius: 12, background: "rgba(245,158,11,0.08)", border: "1px solid rgba(245,158,11,0.2)", width: "100%", textAlign: "left" }}><div style={{ fontSize: 13, color: "#FBBF24", fontWeight: 600, marginBottom: 4, display: "flex", alignItems: "center", gap: 8 }}><StudioLucide name="AlertTriangle" size={18} color="#FBBF24" /> No AI providers configured</div><div style={{ fontSize: 12, color: "#D4A574", lineHeight: 1.5 }}>Open Settings (gear icon) in the top bar to add API keys, or set them in .env.local on the server.</div></div>}
       </div>) : (<div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
         {messages.map(msg => (<div key={msg.id} style={{ display: "flex", flexDirection: "column", alignItems: msg.role === "user" ? "flex-end" : "flex-start", gap: 6 }}>
           {msg.role === "user" ? (<div style={{ maxWidth: "80%", padding: "14px 18px", borderRadius: 14, background: "linear-gradient(135deg,rgba(108,43,217,0.2),rgba(108,43,217,0.1))", border: "1px solid rgba(108,43,217,0.2)" }}>
             <div style={{ display: "flex", gap: 6, marginBottom: 8, flexWrap: "wrap" }}><span style={{ fontSize: 10, fontWeight: 600, padding: "2px 8px", borderRadius: 4, background: "rgba(255,255,255,0.08)", color: "#8B8DA3", textTransform: "uppercase" }}>{msg.mode}</span><span style={{ fontSize: 10, fontWeight: 600, padding: "2px 8px", borderRadius: 4, background: "rgba(245,158,11,0.15)", color: "#FBBF24" }}>{msg.tone}</span>{msg.templateId && <span style={{ fontSize: 10, fontWeight: 600, padding: "2px 8px", borderRadius: 4, background: "rgba(108,43,217,0.15)", color: "#C4B5FD" }}>{TEMPLATES.find(t => t.id === msg.templateId)?.name || msg.templateId}</span>}<span style={{ fontSize: 10, fontWeight: 600, padding: "2px 8px", borderRadius: 4, background: "rgba(20,184,166,0.15)", color: "#5EEAD4" }}>{msg.numText}T · {msg.numVisual}V</span>{msg.channels?.includes("linkedin") && msg.linkedinIncludeCarousel === false && <span style={{ fontSize: 10, fontWeight: 600, padding: "2px 8px", borderRadius: 4, background: "rgba(10,102,194,0.2)", color: "#93C5FD" }}>LI · no carousel</span>}</div>
             <div style={{ fontSize: 14, color: "#E2E4EA", lineHeight: 1.6 }}>{msg.content}</div>
           </div>) : msg.role === "error" ? (<div style={{ maxWidth: "80%", padding: "14px 18px", borderRadius: 14, background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.2)" }}>
-            <div style={{ fontSize: 13, color: "#FCA5A5", lineHeight: 1.6 }}>⚠ {msg.content}</div>
-          </div>) : (<div style={{ maxWidth: "95%", width: "100%" }}><GenerationCard bundle={msg.bundle} channels={msg.channels} onUpdateBundle={(updater) => handleBundleUpdate(msg.id, updater)} onCopy={handleCopy} onRegenerate={(chId) => onRegenerate(msg.id, chId)} onGenerateImage={(chId) => onGenerateImage?.(msg.id, chId)} onOpenDesigner={onOpenDesigner} isGenerating={isGenerating} activeBrand={activeBrand} designerPostSizeId={designerPostSizeId} designerWhiteBg={designerWhiteBg} /></div>)}
+            <div style={{ fontSize: 13, color: "#FCA5A5", lineHeight: 1.6, display: "flex", alignItems: "flex-start", gap: 8 }}><StudioLucide name="AlertCircle" size={18} color="#FCA5A5" style={{ flexShrink: 0, marginTop: 2 }} /><span>{msg.content}</span></div>
+          </div>) : (<div style={{ maxWidth: "95%", width: "100%" }}><GenerationCard bundle={msg.bundle} channels={msg.channels} onUpdateBundle={(updater) => handleBundleUpdate(msg.id, updater)} onCopy={handleCopy} onRegenerate={(chId) => onRegenerate(msg.id, chId)} onGenerateImage={(chId) => onGenerateImage?.(msg.id, chId)} onOpenDesigner={onOpenDesigner} isGenerating={isGenerating} activeBrand={activeBrand} designerPostSizeId={designerPostSizeId} designerWhiteBg={designerWhiteBg} designerHideLogo={designerHideLogo} /></div>)}
           <span style={{ fontSize: 10, color: "#52556B", padding: "0 4px" }}>{msg.time}</span>
         </div>))}
-        {isGenerating && (<div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 6 }}><div style={{ padding: "20px 24px", borderRadius: 14, background: "rgba(108,43,217,0.06)", border: "1px solid rgba(108,43,217,0.15)", width: "100%" }}><LoadingDots text={generationPhase === "url" ? "Parsing URL" : generationPhase === "text" ? `Generating text for ${activeChannels.length} channel${activeChannels.length > 1 ? "s" : ""}` : generationPhase === "images" ? "Generating images" : "Generating"} /><div style={{ marginTop: 10, display: "flex", gap: 6 }}>{activeChannels.map(chId => { const c = CHANNELS.find(x => x.id === chId); return c ? <span key={chId} style={{ fontSize: 10, fontWeight: 600, padding: "3px 8px", borderRadius: 4, background: c.color + "15", color: c.color }}>{c.label}</span> : null; })}</div></div></div>)}
+        {isGenerating && (<div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 6 }}><div style={{ padding: "20px 24px", borderRadius: 14, background: "rgba(108,43,217,0.06)", border: "1px solid rgba(108,43,217,0.15)", width: "100%" }}><LoadingDots text={generationPhase === "url" ? "Fetching article" : generationPhase === "prepare" ? "Claude: channel-aware brief" : generationPhase === "text" ? `Generating text for ${activeChannels.length} channel${activeChannels.length > 1 ? "s" : ""}` : generationPhase === "images" ? "Generating images" : "Working"} /><div style={{ marginTop: 10, display: "flex", gap: 6 }}>{activeChannels.map(chId => { const c = CHANNELS.find(x => x.id === chId); return c ? <span key={chId} style={{ fontSize: 10, fontWeight: 600, padding: "3px 8px", borderRadius: 4, background: c.color + "15", color: c.color }}>{c.label}</span> : null; })}</div></div></div>)}
         <div ref={endRef} />
       </div>)}
     </div>
 
     {/* Input Area — flexShrink:0 + z-index so this strip is never covered or squashed by the message list */}
     <div style={{ flexShrink: 0, position: "relative", zIndex: 8, padding: "16px 24px 20px", borderTop: "1px solid rgba(255,255,255,0.06)", background: "rgba(0,0,0,0.2)", boxShadow: "0 -8px 24px rgba(0,0,0,0.35)" }}>
-      {selectedTpl && (<div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 12px", borderRadius: 8, background: "rgba(108,43,217,0.08)", border: "1px solid rgba(108,43,217,0.15)", marginBottom: 10 }}><span style={{ fontSize: 16 }}>{selectedTpl.icon}</span><span style={{ fontSize: 12, fontWeight: 600, color: "#C4B5FD" }}>{selectedTpl.name}</span><span style={{ fontSize: 11, color: "#6B7084" }}>· {selectedTpl.channels.length} channels</span><button type="button" onClick={() => setSelectedTemplateId(null)} style={{ marginLeft: "auto", fontSize: 14, color: "#6B7084", background: "none", border: "none", cursor: "pointer", padding: "2px 6px" }}>✕</button></div>)}
+      {selectedTpl && (<div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 12px", borderRadius: 8, background: "rgba(108,43,217,0.08)", border: "1px solid rgba(108,43,217,0.15)", marginBottom: 10 }}><StudioLucide name={selectedTpl.lucide} size={18} color="#C4B5FD" /><span style={{ fontSize: 12, fontWeight: 600, color: "#C4B5FD" }}>{selectedTpl.name}</span><span style={{ fontSize: 11, color: "#6B7084" }}>· {selectedTpl.channels.length} channels</span><button type="button" aria-label="Clear template" onClick={() => setSelectedTemplateId(null)} style={{ marginLeft: "auto", color: "#6B7084", background: "none", border: "none", cursor: "pointer", padding: "2px 6px", display: "flex", alignItems: "center" }}><StudioLucide name="X" size={16} color="#6B7084" /></button></div>)}
       <div style={{ marginBottom: 6 }} onMouseDown={(e) => e.stopPropagation()}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
           <span style={{ fontSize: 11, color: "#52556B", fontWeight: 600 }}>CHANNELS</span>
@@ -584,7 +777,7 @@ function CenterPanel({ activeChannels, setActiveChannels, linkedinIncludeCarouse
           >
             {INPUT_MODES.map((m) => (
               <option key={m.id} value={m.id}>
-                {m.emoji} {m.label}
+                {m.label}
               </option>
             ))}
           </select>
@@ -616,22 +809,58 @@ function CenterPanel({ activeChannels, setActiveChannels, linkedinIncludeCarouse
           >
             {TONES.map((t) => (
               <option key={t} value={t}>
-                🎭 {t}
+                {t}
               </option>
             ))}
           </select>
           <div style={{ display: "flex", alignItems: "center", gap: 4, padding: "3px 4px", borderRadius: 7, background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.06)" }}><span style={{ fontSize: 10, color: "#6B7084", fontWeight: 600, padding: "0 4px" }}>Text</span>{[1, 2, 3, 4].map(n => (<button key={n} onClick={() => setNumText(n)} style={{ width: 22, height: 22, borderRadius: 5, border: "none", cursor: "pointer", fontSize: 10, fontWeight: 700, fontFamily: "inherit", background: numText === n ? "rgba(108,43,217,0.3)" : "transparent", color: numText === n ? "#C4B5FD" : "#52556B" }}>{n}</button>))}</div>
-          <div style={{ display: "flex", alignItems: "center", gap: 4, padding: "3px 4px", borderRadius: 7, background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.06)" }}><span style={{ fontSize: 10, color: "#6B7084", fontWeight: 600, padding: "0 4px" }}>Visual</span>{[1, 2, 3, 4].map(n => (<button key={n} onClick={() => setNumVisual(n)} style={{ width: 22, height: 22, borderRadius: 5, border: "none", cursor: "pointer", fontSize: 10, fontWeight: 700, fontFamily: "inherit", background: numVisual === n ? "rgba(20,184,166,0.3)" : "transparent", color: numVisual === n ? "#5EEAD4" : "#52556B" }}>{n}</button>))}</div>
-          <div style={{ marginLeft: "auto", display: "flex", gap: 6, flexWrap: "wrap" }}>{cfgModels.map(m => <span key={m.id} style={{ fontSize: 10, padding: "3px 8px", borderRadius: 5, background: m.color + "18", color: m.color, fontWeight: 600 }}>{m.name}</span>)}{cfgModels.length === 0 && <span style={{ fontSize: 10, padding: "3px 8px", borderRadius: 5, background: "rgba(239,68,68,0.12)", color: "#FCA5A5", fontWeight: 600 }}>No models ⚙</span>}</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 4, padding: "3px 4px", borderRadius: 7, background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.06)" }} title="0 = text only, no image slots or auto-generation"><span style={{ fontSize: 10, color: "#6B7084", fontWeight: 600, padding: "0 2px 0 4px" }}>Visual</span>{[0, 1, 2, 3, 4].map(n => (<button key={n} type="button" onClick={() => setNumVisual(n)} style={{ minWidth: 22, height: 22, borderRadius: 5, border: "none", cursor: "pointer", fontSize: 10, fontWeight: 700, fontFamily: "inherit", background: numVisual === n ? "rgba(20,184,166,0.3)" : "transparent", color: numVisual === n ? "#5EEAD4" : "#52556B", padding: "0 4px" }}>{n}</button>))}</div>
+          <div style={{ marginLeft: "auto", display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>{cfgModels.map(m => <span key={m.id} style={{ fontSize: 10, padding: "3px 8px", borderRadius: 5, background: m.color + "18", color: m.color, fontWeight: 600 }}>{m.name}</span>)}{cfgModels.length === 0 && <span style={{ fontSize: 10, padding: "3px 8px", borderRadius: 5, background: "rgba(239,68,68,0.12)", color: "#FCA5A5", fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 4 }}><StudioLucide name="Settings" size={12} color="#FCA5A5" /> No models</span>}</div>
         </div>
-        <div style={{ display: "flex", alignItems: "flex-end", padding: 4 }}><textarea ref={ref} value={inputValue} onChange={e => setInputValue(e.target.value)} onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }} placeholder={placeholder} disabled={isGenerating} style={{ flex: 1, padding: "12px 14px", border: "none", background: "transparent", color: "#E2E4EA", fontSize: 14, fontFamily: "'DM Sans',sans-serif", outline: "none", resize: "none", minHeight: 48, maxHeight: 160, lineHeight: 1.5, opacity: isGenerating ? 0.5 : 1 }} rows={2} /><div style={{ padding: 8 }}><button onClick={send} disabled={!inputValue.trim() || isGenerating} style={{ width: 36, height: 36, borderRadius: 8, border: "none", background: (inputValue.trim() && !isGenerating) ? "linear-gradient(135deg,#6C2BD9,#5B21B6)" : "rgba(255,255,255,0.04)", color: (inputValue.trim() && !isGenerating) ? "white" : "#52556B", cursor: (inputValue.trim() && !isGenerating) ? "pointer" : "default", display: "flex", alignItems: "center", justifyContent: "center" }}>{isGenerating ? <LoadingDots text="" /> : <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" /></svg>}</button></div></div>
+        {inputMode === "upload" && (
+          <div style={{ padding: "8px 14px 0", display: "flex", flexWrap: "wrap", alignItems: "center", gap: 10 }}>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".pdf,.docx,image/png,image/jpeg,image/jpg,image/webp,image/gif"
+              disabled={isGenerating}
+              style={{ display: "none" }}
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                setUploadFile(f || null);
+              }}
+            />
+            <button
+              type="button"
+              disabled={isGenerating}
+              onClick={() => fileInputRef.current?.click()}
+              style={{
+                padding: "8px 14px",
+                borderRadius: 8,
+                border: "1px solid rgba(255,255,255,0.12)",
+                background: "rgba(255,255,255,0.05)",
+                color: "#C4B5FD",
+                fontSize: 12,
+                fontWeight: 600,
+                cursor: isGenerating ? "default" : "pointer",
+                fontFamily: "inherit",
+              }}
+            >
+              Choose file
+            </button>
+            <span style={{ fontSize: 11, color: uploadFile ? "#8B8DA3" : "#52556B" }}>
+              {uploadFile ? uploadFile.name : "PDF, Word (.docx), or image — analyzed with Claude, then posts / landing / images"}
+            </span>
+          </div>
+        )}
+        <div style={{ display: "flex", alignItems: "flex-end", padding: 4 }}><textarea ref={ref} value={inputValue} onChange={e => setInputValue(e.target.value)} onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { if (inputMode === "upload" && !uploadFile) return; e.preventDefault(); send(); } }} placeholder={placeholder} disabled={isGenerating} style={{ flex: 1, padding: "12px 14px", border: "none", background: "transparent", color: "#E2E4EA", fontSize: 14, fontFamily: "'DM Sans',sans-serif", outline: "none", resize: "none", minHeight: 48, maxHeight: 160, lineHeight: 1.5, opacity: isGenerating ? 0.5 : 1 }} rows={2} /><div style={{ padding: 8 }}><button onClick={send} disabled={!canSend} style={{ width: 36, height: 36, borderRadius: 8, border: "none", background: canSend ? "linear-gradient(135deg,#6C2BD9,#5B21B6)" : "rgba(255,255,255,0.04)", color: canSend ? "white" : "#52556B", cursor: canSend ? "pointer" : "default", display: "flex", alignItems: "center", justifyContent: "center" }}>{isGenerating ? <LoadingDots text="" /> : <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" /></svg>}</button></div></div>
       </div>
     </div>
   </div>);
 }
 
 // ─── Right Panel ────────────────────────────────────────────────────────
-function RightPanel({ activeChannels, setActiveChannels, activeChannel, setActiveChannel, collapsed, previewData, addToast, activeBrand, onTextEdit, onOpenDesigner, designerPostSizeId = "1080x1080-trns", designerWhiteBg = true, width = 380 }) {
+function RightPanel({ activeChannels, setActiveChannels, activeChannel, setActiveChannel, collapsed, previewData, addToast, activeBrand, onTextEdit, onOpenDesigner, designerPostSizeId = "1080x1080-trns", designerWhiteBg = true, designerHideLogo = false, width = 380 }) {
   if (collapsed) return null;
   const pd = previewData || {}; const text = pd.text || "Your generated content will appear here..."; const slots = pd.visualSlots || [];
   const [editing, setEditing] = useState(false); const [editText, setEditText] = useState(text); const [versionIdx, setVersionIdx] = useState(0); const [versions, setVersions] = useState([{ text, time: "now" }]);
@@ -661,6 +890,7 @@ function RightPanel({ activeChannels, setActiveChannels, activeChannel, setActiv
           sourceText={curText}
           postSizeId={designerPostSizeId}
           whiteBg={designerWhiteBg}
+          hideLogo={designerHideLogo}
           designerContent={sel.designerContent}
           heightPx={height}
           onOpenDesigner={onOpenDesigner}
@@ -746,10 +976,10 @@ function RightPanel({ activeChannels, setActiveChannels, activeChannel, setActiv
     <div style={{ flex: 1, padding: 20, overflowY: "auto" }}>
       <div style={{ borderRadius: 14, border: "1px solid rgba(255,255,255,0.06)", background: "rgba(255,255,255,0.02)", overflow: "hidden" }}>
         {activeChannel === "linkedin" && <div style={{ padding: 16 }}>
-          <div style={{ display: "flex", gap: 12, marginBottom: 14 }}><div style={{ width: 44, height: 44, borderRadius: "50%", background: "linear-gradient(135deg,#6C2BD9,#14B8A6)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18, fontWeight: 700, color: "white" }}>P</div><div><div style={{ fontSize: 14, fontWeight: 700, color: "#E2E4EA" }}>Prashanth Kumar</div><div style={{ fontSize: 12, color: "#6B7084" }}>CTO & Co-founder at Enkrypt AI</div><div style={{ fontSize: 11, color: "#52556B" }}>Just now · 🌍</div></div></div>
+          <div style={{ display: "flex", gap: 12, marginBottom: 14 }}><div style={{ width: 44, height: 44, borderRadius: "50%", background: "linear-gradient(135deg,#6C2BD9,#14B8A6)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18, fontWeight: 700, color: "white" }}>P</div><div><div style={{ fontSize: 14, fontWeight: 700, color: "#E2E4EA" }}>Prashanth Kumar</div><div style={{ fontSize: 12, color: "#6B7084" }}>CTO & Co-founder at Enkrypt AI</div><div style={{ fontSize: 11, color: "#52556B", display: "flex", alignItems: "center", gap: 6 }}>Just now · <StudioLucide name="Globe" size={12} color="#52556B" /></div></div></div>
           {editing ? <div><textarea value={editText} onChange={e => setEditText(e.target.value)} style={{ width: "100%", minHeight: 120, padding: 12, borderRadius: 10, border: "1px solid rgba(108,43,217,0.3)", background: "rgba(108,43,217,0.05)", color: "#E2E4EA", fontSize: 13, fontFamily: "'DM Sans',sans-serif", lineHeight: 1.7, outline: "none", resize: "vertical", boxSizing: "border-box" }} /><div style={{ display: "flex", gap: 6, marginTop: 8 }}><button onClick={saveEdit} style={{ padding: "6px 14px", borderRadius: 7, border: "none", background: "linear-gradient(135deg,#6C2BD9,#5B21B6)", color: "white", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>Save</button><button onClick={() => { setEditing(false); setEditText(versions[versionIdx].text); }} style={{ padding: "6px 14px", borderRadius: 7, border: "1px solid rgba(255,255,255,0.08)", background: "transparent", color: "#8B8DA3", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>Cancel</button></div></div> : <div onClick={() => setEditing(true)} style={{ fontSize: 13, color: "#C4C6D0", lineHeight: 1.7, cursor: "text", whiteSpace: "pre-wrap", padding: 4, borderRadius: 8, transition: "all 0.15s" }} onMouseEnter={e => e.currentTarget.style.background = "rgba(108,43,217,0.05)"} onMouseLeave={e => e.currentTarget.style.background = "transparent"}>{curText}</div>}
           {slots.length > 0 ? slots.map((s, i) => renderVisualSlot(s, i)) : null}
-          <div style={{ display: "flex", gap: 20, marginTop: 16, paddingTop: 12, borderTop: "1px solid rgba(255,255,255,0.06)" }}>{["👍 Like", "💬 Comment", "🔄 Repost", "📨 Send"].map(a => <span key={a} style={{ fontSize: 12, color: "#52556B" }}>{a}</span>)}</div>
+          <div style={{ display: "flex", gap: 16, marginTop: 16, paddingTop: 12, borderTop: "1px solid rgba(255,255,255,0.06)", alignItems: "center", flexWrap: "wrap" }}>{[{ label: "Like", lucide: "ThumbsUp" }, { label: "Comment", lucide: "MessageCircle" }, { label: "Repost", lucide: "Repeat2" }, { label: "Send", lucide: "Send" }].map(({ label, lucide }) => (<span key={label} style={{ fontSize: 12, color: "#52556B", display: "inline-flex", alignItems: "center", gap: 5 }}><StudioLucide name={lucide} size={14} color="#52556B" />{label}</span>))}</div>
         </div>}
         {activeChannel === "twitter" && <div style={{ padding: 16 }}><div style={{ display: "flex", gap: 12 }}><div style={{ width: 40, height: 40, borderRadius: "50%", background: "linear-gradient(135deg,#6C2BD9,#14B8A6)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, fontWeight: 700, color: "white", flexShrink: 0 }}>P</div><div style={{ flex: 1 }}><div style={{ display: "flex", gap: 6, alignItems: "center" }}><span style={{ fontSize: 14, fontWeight: 700, color: "#E2E4EA" }}>Prashanth</span><span style={{ fontSize: 13, color: "#52556B" }}>@prashanth_ai · now</span></div>{editing ? <textarea value={editText} onChange={e => setEditText(e.target.value)} style={{ width: "100%", minHeight: 80, padding: 8, borderRadius: 8, border: "1px solid rgba(29,155,240,0.3)", background: "rgba(29,155,240,0.05)", color: "#E2E4EA", fontSize: 14, fontFamily: "'DM Sans',sans-serif", lineHeight: 1.6, outline: "none", resize: "vertical", marginTop: 6, boxSizing: "border-box" }} /> : <div onClick={() => setEditing(true)} style={{ fontSize: 14, color: "#C4C6D0", lineHeight: 1.6, marginTop: 6, cursor: "text" }}>{curText.slice(0, 280)}</div>}{cc(curText) > 280 && <div style={{ fontSize: 11, color: "#FCA5A5", marginTop: 4, fontWeight: 600 }}>{cc(curText)}/280 — over limit</div>}</div></div></div>}
         {activeChannel === "landing" && <div style={{ padding: 16 }}>
@@ -778,10 +1008,10 @@ function RightPanel({ activeChannels, setActiveChannels, activeChannel, setActiv
       <div style={{ marginTop: 16, padding: 14, borderRadius: 12, background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)" }}>
         <div style={{ fontSize: 11, fontWeight: 700, color: "#52556B", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: 10 }}>Quick Actions</div>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-          <button onClick={() => setEditing(true)} style={{ padding: "6px 12px", borderRadius: 7, border: "1px solid rgba(255,255,255,0.06)", background: "rgba(255,255,255,0.03)", color: "#8B8DA3", fontSize: 12, fontWeight: 500, cursor: "pointer", fontFamily: "inherit" }}>✏️ Edit</button>
-          {slots.some((s) => getVisualSelectedIndices(s).some((ix) => s.variants?.[ix]?.url)) && <button type="button" onClick={() => { for (const s of slots) { const idxs = getVisualSelectedIndices(s); const hit = idxs.find((ix) => s.variants?.[ix]?.url); if (hit != null) { const v = s.variants[hit]; onOpenDesigner?.(v.url, v.designerContent, slots); break; } } }} style={{ padding: "6px 12px", borderRadius: 7, border: "1px solid rgba(108,43,217,0.35)", background: "rgba(108,43,217,0.08)", color: "#C4B5FD", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>🎨 Visual designer</button>}
-          <button onClick={() => { clipCopy(curText).then(ok => addToast(ok ? "Copied!" : "Copy failed", ok ? "success" : "error")); }} style={{ padding: "6px 12px", borderRadius: 7, border: "1px solid rgba(255,255,255,0.06)", background: "rgba(255,255,255,0.03)", color: "#8B8DA3", fontSize: 12, fontWeight: 500, cursor: "pointer", fontFamily: "inherit" }}>📋 Copy</button>
-          <button onClick={() => { downloadFile(curText, `${activeChannel}-content.md`, "text/markdown"); addToast("Downloaded!", "success"); }} style={{ padding: "6px 12px", borderRadius: 7, border: "1px solid rgba(255,255,255,0.06)", background: "rgba(255,255,255,0.03)", color: "#8B8DA3", fontSize: 12, fontWeight: 500, cursor: "pointer", fontFamily: "inherit" }}>⬇️ Download</button>
+          <button type="button" onClick={() => setEditing(true)} style={{ padding: "6px 12px", borderRadius: 7, border: "1px solid rgba(255,255,255,0.06)", background: "rgba(255,255,255,0.03)", color: "#8B8DA3", fontSize: 12, fontWeight: 500, cursor: "pointer", fontFamily: "inherit", display: "inline-flex", alignItems: "center", gap: 6 }}><StudioLucide name="Pencil" size={14} color="#8B8DA3" /> Edit</button>
+          {slots.some((s) => getVisualSelectedIndices(s).some((ix) => s.variants?.[ix]?.url)) && <button type="button" onClick={() => { for (const s of slots) { const idxs = getVisualSelectedIndices(s); const hit = idxs.find((ix) => s.variants?.[ix]?.url); if (hit != null) { const v = s.variants[hit]; onOpenDesigner?.(v.url, v.designerContent, slots); break; } } }} style={{ padding: "6px 12px", borderRadius: 7, border: "1px solid rgba(108,43,217,0.35)", background: "rgba(108,43,217,0.08)", color: "#C4B5FD", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", display: "inline-flex", alignItems: "center", gap: 6 }}><StudioLucide name="Palette" size={14} color="#C4B5FD" /> Visual designer</button>}
+          <button type="button" onClick={() => { clipCopy(curText).then(ok => addToast(ok ? "Copied!" : "Copy failed", ok ? "success" : "error")); }} style={{ padding: "6px 12px", borderRadius: 7, border: "1px solid rgba(255,255,255,0.06)", background: "rgba(255,255,255,0.03)", color: "#8B8DA3", fontSize: 12, fontWeight: 500, cursor: "pointer", fontFamily: "inherit", display: "inline-flex", alignItems: "center", gap: 6 }}><StudioLucide name="Copy" size={14} color="#8B8DA3" /> Copy</button>
+          <button type="button" onClick={() => { downloadFile(curText, `${activeChannel}-content.md`, "text/markdown"); addToast("Downloaded!", "success"); }} style={{ padding: "6px 12px", borderRadius: 7, border: "1px solid rgba(255,255,255,0.06)", background: "rgba(255,255,255,0.03)", color: "#8B8DA3", fontSize: 12, fontWeight: 500, cursor: "pointer", fontFamily: "inherit", display: "inline-flex", alignItems: "center", gap: 6 }}><StudioLucide name="Download" size={14} color="#8B8DA3" /> Download</button>
         </div>
       </div>
 
@@ -827,12 +1057,14 @@ export default function Workspace({ user, onLogout }) {
   });
   const [designerPostSizeId, setDesignerPostSizeId] = useState("1080x1080-trns");
   const [designerWhiteBg, setDesignerWhiteBg] = useState(true);
-  const [designerThemeId, setDesignerThemeId] = useState("hooks");
+  const [designerThemeId, setDesignerThemeId] = useState("none");
+  const [designerHideLogo, setDesignerHideLogo] = useState(false);
   const addToast = (message, type = "info") => { const id = Date.now() + Math.random(); setToasts(p => [...p, { id, message, type }]); setTimeout(() => setToasts(p => p.filter(t => t.id !== id)), 3500); };
   const designerLayoutForEmbed = () => ({
     postSizeId: designerPostSizeId,
     designerWhiteBg,
     themeId: designerThemeId,
+    hideLogo: designerHideLogo,
   });
   const openDesignerWithImage = (url, designerContent, visualSlotsArg) => {
     const lastAi = [...currentMessages].reverse().find((m) => m.role === "assistant");
@@ -850,7 +1082,7 @@ export default function Workspace({ user, onLogout }) {
     if (!list.length) return;
     const idx = options.length > 0 ? activeIndex : 0;
     const cur = list[idx];
-    primeDesignerEmbed(cur.url, cur.designerContent ?? designerContent ?? null, designerLayoutForEmbed());
+    primeDesignerEmbed(cur.url, cur.designerContent ?? designerContent ?? null, designerLayoutForEmbed(), activeBrand || null);
     setDesignerOverlay({
       open: true,
       embedKey: Date.now(),
@@ -885,6 +1117,9 @@ export default function Workspace({ user, onLogout }) {
     if (payload?.themeId && typeof payload.themeId === "string") {
       setDesignerThemeId(payload.themeId);
     }
+    if (typeof payload?.hideLogo === "boolean") {
+      setDesignerHideLogo(payload.hideLogo);
+    }
   };
 
   const [projects, setProjects] = useState([]);
@@ -897,7 +1132,31 @@ export default function Workspace({ user, onLogout }) {
     try { const s = localStorage.getItem("ce_api_keys"); if (s) setApiKeys(JSON.parse(s)); } catch {}
     try { const b = localStorage.getItem("ce_active_brand"); if (b) setActiveBrandId(b); } catch {}
     checkProviderStatus().then(setServerStatus).catch(() => {});
-    loadBrands().then(saved => { if (saved && saved.length > 0) setBrands(saved); else defaultBrands.forEach(b => saveBrand(b)); }).catch(() => {});
+    loadBrands()
+      .then((saved) => {
+        if (saved && saved.length > 0) {
+          const migrated = saved.map((b) => {
+            try {
+              return isEnkryptStudioBrand(b) ? syncEnkryptMarketingPrimaryToCanonical(b) : b;
+            } catch {
+              return b;
+            }
+          });
+          setBrands(migrated);
+          migrated.forEach((b, i) => {
+            if (!isEnkryptStudioBrand(b)) return;
+            const prev = saved[i];
+            const sig = (x) =>
+              JSON.stringify({
+                primary: x.colors?.primary,
+                secondary: x.colors?.secondary,
+                gradients: x.gradients,
+              });
+            if (sig(b) !== sig(prev)) saveBrand(b).catch(() => {});
+          });
+        } else defaultBrands.forEach((b) => saveBrand(b));
+      })
+      .catch(() => {});
     loadProjects().then(async (saved) => {
       if (saved && saved.length > 0) {
         setProjects(saved);
@@ -1072,7 +1331,8 @@ export default function Workspace({ user, onLogout }) {
     if (!userMsg) { addToast("No source message found", "warning"); return; }
     setIsGenerating(true); setGenerationPhase("text");
     try {
-      const result = await generateText({ input: userMsg.content, channel: channelId, templateId: userMsg.templateId || selectedTemplateId, brand: activeBrand, numVariants: userMsg.numText || 3, tone: userMsg.tone || tone, apiKeys });
+      const sourceText = userMsg.preparedInput || userMsg.content;
+      const result = await generateText({ input: sourceText, channel: channelId, templateId: userMsg.templateId || selectedTemplateId, brand: activeBrand, numVariants: userMsg.numText || 3, tone: userMsg.tone || tone, apiKeys });
       setCurrentMessages(p => p.map(m => { if (m.id !== messageId) return m; const bundle = { ...m.bundle }; bundle[channelId] = { ...bundle[channelId], textVariants: result.variants, selectedTextIdx: 0 }; return { ...m, bundle }; }));
       addToast(`Regenerated ${CHANNELS.find(c => c.id === channelId)?.label || channelId}`, "success");
     } catch (error) { addToast(`Regen failed: ${error.message}`, "error"); }
@@ -1086,7 +1346,7 @@ export default function Workspace({ user, onLogout }) {
     if (allSlots.length === 0) return;
     const textContent = msg.bundle[channelId].textVariants?.[msg.bundle[channelId].selectedTextIdx]?.text || "";
     const userMsg = currentMessages.slice(0, currentMessages.indexOf(msg)).reverse().find(m => m.role === "user");
-    const userTopic = userMsg?.content || "";
+    const userTopic = userMsg?.preparedInput || userMsg?.content || "";
     const contentSummary = [
       userTopic ? `Topic/Input: ${userTopic}` : "",
       textContent ? `Generated content:\n${textContent.slice(0, 1500)}` : "",
@@ -1150,6 +1410,7 @@ export default function Workspace({ user, onLogout }) {
             postSizeId: designerPostSizeId,
             designerWhiteBg,
             designerThemeId,
+            designerHideLogo,
             extractedContent: extractedForImages,
             designerImage: true,
             omitContentTextInImage: true,
@@ -1210,7 +1471,7 @@ export default function Workspace({ user, onLogout }) {
             postSizeId: designerPostSizeId,
             designerWhiteBg,
             themeId: designerThemeId,
-          });
+          }, activeBrand || null);
           setDesignerOverlay({
             open: true,
             embedKey: Date.now(),
@@ -1250,23 +1511,23 @@ export default function Workspace({ user, onLogout }) {
       <div style={{ width: 1, height: 24, background: "rgba(255,255,255,0.08)", margin: "0 4px" }} />
       <input value={projectTitle} onChange={e => setProjectTitle(e.target.value)} style={{ background: "transparent", border: "none", color: "#8B8DA3", fontSize: 14, fontWeight: 500, fontFamily: "inherit", outline: "none", padding: "4px 8px", borderRadius: 6, maxWidth: 200 }} onFocus={e => { e.target.style.background = "rgba(255,255,255,0.05)"; e.target.style.color = "#E2E4EA"; }} onBlur={e => { e.target.style.background = "transparent"; e.target.style.color = "#8B8DA3"; }} />
       <div style={{ flex: 1 }} />
-      <div style={{ position: "relative" }}><button type="button" ref={brandBtnRef} onClick={() => setBrandDrop(!brandDrop)} style={{ display: "flex", alignItems: "center", gap: 10, padding: "6px 14px", borderRadius: 9, border: "1px solid rgba(255,255,255,0.08)", background: "rgba(255,255,255,0.03)", cursor: "pointer", fontFamily: "inherit" }}><div style={{ width: 22, height: 22, borderRadius: 5, background: activeBrand ? `linear-gradient(135deg,${activeBrand.colors.primary},${activeBrand.colors.secondary})` : "#333", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, fontWeight: 800, color: "white" }}>{activeBrand?.company_name[0] || "?"}</div><span style={{ fontSize: 13, fontWeight: 600, color: "#E2E4EA" }}>{activeBrand?.name || "Brand"}</span><span style={{ fontSize: 10, color: "#6B7084" }}>▾</span></button>
-        {brandDrop && (<div ref={brandMenuRef} style={{ position: "absolute", top: "110%", right: 0, zIndex: 200, background: "#1A1B23", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 12, padding: 6, minWidth: 240, boxShadow: "0 12px 40px rgba(0,0,0,0.5)" }}>{brands.map(brand => (<button key={brand.id} type="button" onClick={() => { setActiveBrandId(brand.id); setBrandDrop(false); }} style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: "none", background: activeBrandId === brand.id ? "rgba(108,43,217,0.15)" : "transparent", cursor: "pointer", fontFamily: "inherit", textAlign: "left", display: "flex", alignItems: "center", gap: 10 }} onMouseEnter={e => { if (activeBrandId !== brand.id) e.currentTarget.style.background = "rgba(255,255,255,0.05)"; }} onMouseLeave={e => { if (activeBrandId !== brand.id) e.currentTarget.style.background = "transparent"; }}><div style={{ width: 28, height: 28, borderRadius: 6, background: `linear-gradient(135deg,${brand.colors.primary},${brand.colors.secondary})`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 800, color: "white" }}>{brand.company_name[0]}</div><div style={{ flex: 1 }}><div style={{ fontSize: 13, fontWeight: 600, color: "#E2E4EA" }}>{brand.name}</div><div style={{ fontSize: 11, color: "#6B7084" }}>{brand.tagline}</div></div>{activeBrandId === brand.id && <span style={{ color: "#6C2BD9" }}>✓</span>}</button>))}<div style={{ borderTop: "1px solid rgba(255,255,255,0.06)", margin: "4px 0", padding: "4px 0 0" }}><button type="button" onClick={() => { setBrandDrop(false); openBrandEditor(null); }} style={{ width: "100%", padding: "8px 12px", borderRadius: 8, border: "none", background: "transparent", cursor: "pointer", fontFamily: "inherit", color: "#6B7084", fontSize: 12, textAlign: "left", display: "flex", alignItems: "center", gap: 8 }} onMouseEnter={e => e.currentTarget.style.color = "#C4B5FD"} onMouseLeave={e => e.currentTarget.style.color = "#6B7084"}>+ New Brand</button></div></div>)}
+      <div style={{ position: "relative" }}><button type="button" ref={brandBtnRef} onClick={() => setBrandDrop(!brandDrop)} style={{ display: "flex", alignItems: "center", gap: 10, padding: "6px 14px", borderRadius: 9, border: "1px solid rgba(255,255,255,0.08)", background: "rgba(255,255,255,0.03)", cursor: "pointer", fontFamily: "inherit" }}><div style={{ width: 22, height: 22, borderRadius: 5, background: activeBrand ? brandGradientCss(activeBrand) : "#333", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, fontWeight: 800, color: "white" }}>{brandInitial(activeBrand)}</div><span style={{ fontSize: 13, fontWeight: 600, color: "#E2E4EA" }}>{activeBrand?.name || "Brand"}</span><span style={{ fontSize: 10, color: "#6B7084" }}>▾</span></button>
+        {brandDrop && (<div ref={brandMenuRef} style={{ position: "absolute", top: "110%", right: 0, zIndex: 200, background: "#1A1B23", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 12, padding: 6, minWidth: 240, boxShadow: "0 12px 40px rgba(0,0,0,0.5)" }}>{brands.map(brand => (<button key={brand.id} type="button" onClick={() => { setActiveBrandId(brand.id); setBrandDrop(false); }} style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: "none", background: activeBrandId === brand.id ? "rgba(108,43,217,0.15)" : "transparent", cursor: "pointer", fontFamily: "inherit", textAlign: "left", display: "flex", alignItems: "center", gap: 10 }} onMouseEnter={e => { if (activeBrandId !== brand.id) e.currentTarget.style.background = "rgba(255,255,255,0.05)"; }} onMouseLeave={e => { if (activeBrandId !== brand.id) e.currentTarget.style.background = "transparent"; }}><div style={{ width: 28, height: 28, borderRadius: 6, background: brandGradientCss(brand), display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 800, color: "white" }}>{brandInitial(brand)}</div><div style={{ flex: 1 }}><div style={{ fontSize: 13, fontWeight: 600, color: "#E2E4EA" }}>{brand.name}</div><div style={{ fontSize: 11, color: "#6B7084" }}>{brand.tagline}</div></div>{activeBrandId === brand.id && <span style={{ color: "#6C2BD9" }}>✓</span>}</button>))}<div style={{ borderTop: "1px solid rgba(255,255,255,0.06)", margin: "4px 0", padding: "4px 0 0" }}><button type="button" onClick={() => { setBrandDrop(false); openBrandEditor(null); }} style={{ width: "100%", padding: "8px 12px", borderRadius: 8, border: "none", background: "transparent", cursor: "pointer", fontFamily: "inherit", color: "#6B7084", fontSize: 12, textAlign: "left", display: "flex", alignItems: "center", gap: 8 }} onMouseEnter={e => e.currentTarget.style.color = "#C4B5FD"} onMouseLeave={e => e.currentTarget.style.color = "#6B7084"}>+ New Brand</button></div></div>)}
       </div>
-      <button onClick={() => setShowApiKeys(true)} title="AI Provider Settings" style={{ width: 36, height: 36, borderRadius: 9, border: "1px solid rgba(255,255,255,0.08)", background: "rgba(255,255,255,0.03)", color: "#8B8DA3", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, position: "relative" }}>⚙{(Object.values(apiKeys).filter(Boolean).length > 0 || Object.values(serverStatus).filter(Boolean).length > 0) && <div style={{ position: "absolute", top: -2, right: -2, width: 10, height: 10, borderRadius: "50%", background: "#34D399", border: "2px solid #0C0D14" }} />}</button>
-      <button onClick={() => setShowExport(true)} disabled={isGenerating} style={{ display: "flex", alignItems: "center", gap: 7, padding: "8px 16px", borderRadius: 9, border: "none", cursor: isGenerating ? "default" : "pointer", fontFamily: "inherit", background: "linear-gradient(135deg,#6C2BD9,#5B21B6)", color: "white", fontSize: 13, fontWeight: 600, opacity: isGenerating ? 0.5 : 1 }}>⬇ Export</button>
+      <button type="button" onClick={() => setShowApiKeys(true)} title="AI Provider Settings" aria-label="AI Provider Settings" style={{ width: 36, height: 36, borderRadius: 9, border: "1px solid rgba(255,255,255,0.08)", background: "rgba(255,255,255,0.03)", color: "#8B8DA3", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, position: "relative" }}><StudioLucide name="Settings" size={18} color="#8B8DA3" />{(Object.values(apiKeys).filter(Boolean).length > 0 || Object.values(serverStatus).filter(Boolean).length > 0) && <div style={{ position: "absolute", top: -2, right: -2, width: 10, height: 10, borderRadius: "50%", background: "#34D399", border: "2px solid #0C0D14" }} />}</button>
+      <button type="button" onClick={() => setShowExport(true)} disabled={isGenerating} style={{ display: "flex", alignItems: "center", gap: 7, padding: "8px 16px", borderRadius: 9, border: "none", cursor: isGenerating ? "default" : "pointer", fontFamily: "inherit", background: "linear-gradient(135deg,#6C2BD9,#5B21B6)", color: "white", fontSize: 13, fontWeight: 600, opacity: isGenerating ? 0.5 : 1 }}><StudioLucide name="Download" size={16} color="white" /> Export</button>
       <div style={{ width: 1, height: 24, background: "rgba(255,255,255,0.08)" }} />
       <button onClick={() => setRightCollapsed(!rightCollapsed)} style={{ width: 32, height: 32, borderRadius: 7, border: "none", background: rightCollapsed ? "rgba(108,43,217,0.15)" : "rgba(255,255,255,0.04)", color: rightCollapsed ? "#C4B5FD" : "#8B8DA3", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, fontWeight: 700 }}>◧</button>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, marginLeft: 4 }}><div style={{ width: 30, height: 30, borderRadius: "50%", background: "linear-gradient(135deg,#6C2BD9,#14B8A6)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 700, color: "white" }}>{user.name[0].toUpperCase()}</div><button onClick={onLogout} style={{ background: "none", border: "none", color: "#52556B", cursor: "pointer", fontSize: 14, padding: 4 }}>⏻</button></div>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginLeft: 4 }}><div style={{ width: 30, height: 30, borderRadius: "50%", background: "linear-gradient(135deg,#6C2BD9,#14B8A6)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 700, color: "white" }}>{(user?.name || user?.email || "?")[0].toUpperCase()}</div><button onClick={onLogout} style={{ background: "none", border: "none", color: "#52556B", cursor: "pointer", fontSize: 14, padding: 4 }}>⏻</button></div>
     </div>
 
     {/* Panels */}
     <div style={{ flex: 1, display: "flex", overflow: "hidden" }}>
       <LeftPanel activeTab={leftTab} setActiveTab={setLeftTab} collapsed={leftCollapsed} brands={brands} activeBrandId={activeBrandId} onOpenBrandEditor={openBrandEditor} onSelectBrand={setActiveBrandId} projects={projects} onSelectProject={selectProject} activeProjectId={activeProjectId} onNewProject={newProject} onSelectTemplate={selectTemplate} selectedTemplateId={selectedTemplateId} width={leftWidth} />
       {!leftCollapsed && <PanelDivider onDrag={(dx) => setLeftWidth(w => Math.max(200, Math.min(500, w + dx)))} />}
-      <CenterPanel activeChannels={activeChannels} setActiveChannels={setActiveChannels} linkedinIncludeCarousel={linkedinIncludeCarousel} setLinkedinIncludeCarousel={setLinkedinIncludeCarousel} activeBrand={activeBrand} apiKeys={apiKeys} serverStatus={serverStatus} onSelectPreview={setPreviewData} messages={currentMessages} setMessages={setCurrentMessages} projectTitle={projectTitle} selectedTemplateId={selectedTemplateId} setSelectedTemplateId={setSelectedTemplateId} inputMode={inputMode} setInputMode={setInputMode} tone={tone} setTone={setTone} isGenerating={isGenerating} setIsGenerating={setIsGenerating} generationPhase={generationPhase} setGenerationPhase={setGenerationPhase} addToast={addToast} onRegenerate={regenerateChannel} onGenerateImage={generateAllImages} onOpenDesigner={openDesignerWithImage} designerPostSizeId={designerPostSizeId} setDesignerPostSizeId={setDesignerPostSizeId} designerWhiteBg={designerWhiteBg} setDesignerWhiteBg={setDesignerWhiteBg} designerThemeId={designerThemeId} setDesignerThemeId={setDesignerThemeId} />
+      <CenterPanel activeChannels={activeChannels} setActiveChannels={setActiveChannels} linkedinIncludeCarousel={linkedinIncludeCarousel} setLinkedinIncludeCarousel={setLinkedinIncludeCarousel} activeBrand={activeBrand} apiKeys={apiKeys} serverStatus={serverStatus} onSelectPreview={setPreviewData} messages={currentMessages} setMessages={setCurrentMessages} projectTitle={projectTitle} selectedTemplateId={selectedTemplateId} setSelectedTemplateId={setSelectedTemplateId} inputMode={inputMode} setInputMode={setInputMode} tone={tone} setTone={setTone} isGenerating={isGenerating} setIsGenerating={setIsGenerating} generationPhase={generationPhase} setGenerationPhase={setGenerationPhase} addToast={addToast} onRegenerate={regenerateChannel} onGenerateImage={generateAllImages} onOpenDesigner={openDesignerWithImage} designerPostSizeId={designerPostSizeId} setDesignerPostSizeId={setDesignerPostSizeId} designerWhiteBg={designerWhiteBg} setDesignerWhiteBg={setDesignerWhiteBg} designerThemeId={designerThemeId} setDesignerThemeId={setDesignerThemeId} designerHideLogo={designerHideLogo} />
       {!rightCollapsed && <PanelDivider onDrag={(dx) => setRightWidth(w => Math.max(280, Math.min(600, w - dx)))} />}
-      <RightPanel activeChannels={activeChannels} setActiveChannels={setActiveChannels} activeChannel={activeChannel} setActiveChannel={setActiveChannel} collapsed={rightCollapsed} previewData={previewData} addToast={addToast} activeBrand={activeBrand} onTextEdit={handlePreviewTextEdit} onOpenDesigner={openDesignerWithImage} designerPostSizeId={designerPostSizeId} designerWhiteBg={designerWhiteBg} width={rightWidth} />
+      <RightPanel activeChannels={activeChannels} setActiveChannels={setActiveChannels} activeChannel={activeChannel} setActiveChannel={setActiveChannel} collapsed={rightCollapsed} previewData={previewData} addToast={addToast} activeBrand={activeBrand} onTextEdit={handlePreviewTextEdit} onOpenDesigner={openDesignerWithImage} designerPostSizeId={designerPostSizeId} designerWhiteBg={designerWhiteBg} designerHideLogo={designerHideLogo} width={rightWidth} />
     </div>
 
     <ApiKeysModal open={showApiKeys} onClose={() => setShowApiKeys(false)} apiKeys={apiKeys} setApiKeys={setApiKeys} serverStatus={serverStatus} addToast={addToast} />

@@ -20,6 +20,7 @@ const DEFAULT_LAYOUT_SETTINGS = {
   logoPosition: "top-left",
   padding: 20,
   logoScale: 60,
+  hideLogo: false,
   fontSettings: {
     heading: { size: 40, weight: 600 },
     subheading: { size: 27, weight: 600 },
@@ -46,7 +47,15 @@ export function isDesignerTrnsPostSize(postSizeId) {
   return postSizeId === "1080x1080-trns";
 }
 
-export function buildDesignerPostLayoutContext(logoPosition, logoScale, padding, size, designerWhiteBg, postSizeId) {
+export function buildDesignerPostLayoutContext(
+  logoPosition,
+  logoScale,
+  padding,
+  size,
+  designerWhiteBg,
+  postSizeId,
+  hideLogo = false
+) {
   const pos = POSITIONS.find((p) => p.id === logoPosition);
   const sizeLabel =
     size.width === size.height ? "1:1 square (1080×1080)" : "16:9 landscape (1920×1080)";
@@ -63,7 +72,10 @@ export function buildDesignerPostLayoutContext(logoPosition, logoScale, padding,
       "Background: warm peach/coral Enkrypt AI branded gradient (already provided — do NOT recreate the bg)";
   }
   const exportNote = trns ? "\n- Export note: Same pixel dimensions as 1:1 (1080×1080); transparency is for compositing." : "";
-  return `POST LAYOUT:\n- Canvas size: ${sizeLabel}\n- Logo placement: ${pos?.label ?? logoPosition} at ${logoScale}% scale\n- Edge padding: ${padding}px\n- ${bgLine}${exportNote}`;
+  const logoLine = hideLogo
+    ? "- Logo: **hidden** — the final export will not include a brand mark; do not reserve corner space for a logo in the generated bitmap."
+    : `- Logo placement: ${pos?.label ?? logoPosition} at ${logoScale}% scale`;
+  return `POST LAYOUT:\n- Canvas size: ${sizeLabel}\n${logoLine}\n- Edge padding: ${padding}px\n- ${bgLine}${exportNote}`;
 }
 
 /** Main REQUIREMENTS paragraph — must not contradict white-bg or trns modes. */
@@ -95,7 +107,7 @@ export async function buildDesignerOpenAiImagePrompt(opts) {
   const {
     content,
     rawContentForBrief,
-    themeId = "hooks",
+    themeId = "none",
     size,
     designerWhiteBg = false,
     /** Same as designer post size control: "1080x1080" | "1080x1080-trns" | "1920x1080" — drives trns + layout copy to the model */
@@ -103,7 +115,8 @@ export async function buildDesignerOpenAiImagePrompt(opts) {
     /** designer tab only — same as LeftPanel headerMode === "designer" */
     headerModeDesigner = true,
     apiKey,
-    provider = "openai",
+    visualBriefApiKey = apiKey,
+    visualBriefProvider = "openai",
     /** false: render heading/subheading/footer in-image (designer LeftPanel branch when omit is false) */
     omitContentTextInImage = false,
     variationIdx = 0,
@@ -119,7 +132,8 @@ export async function buildDesignerOpenAiImagePrompt(opts) {
     L.padding,
     size,
     !!(headerModeDesigner && designerWhiteBg),
-    postSizeId
+    postSizeId,
+    !!L.hideLogo
   );
   const critBg = buildCriticalBackgroundParagraph(
     !!(headerModeDesigner && designerWhiteBg),
@@ -163,7 +177,13 @@ export async function buildDesignerOpenAiImagePrompt(opts) {
     ? `\nYou have full creative freedom for the layout and style. Create a clean, modern, professional social media visual.\n${selectedTheme.visualPrompt}`
     : `\nTHEME REFERENCE (color palette and visual tone ONLY — do NOT copy the template's layout, structure, or content):\nTheme name: "${selectedTheme.label}"\nColor palette: ${paletteStr}\nTone/mood: ${selectedTheme.promptContext}\n\n*** CRITICAL: The template is ONLY a color/style/mood reference. Do NOT replicate the template's layout structure, card arrangement, grid, icons, diagrams, flowcharts, or any visual composition from the template. Create your OWN original layout that best presents the user's content. Use the template's colors and visual tone to style your original layout. ***`;
 
-  const visualBrief = await buildVisualBrief(rawContentForBrief, content, apiKey, provider);
+  const briefKey = String(visualBriefApiKey ?? apiKey).replace(/[^\x20-\x7E]/g, "").trim();
+  const visualBrief = await buildVisualBrief(
+    rawContentForBrief,
+    content,
+    briefKey,
+    visualBriefProvider
+  );
   const contentAndVisualBlock = buildContentAndVisualBlock(
     content,
     visualBrief,

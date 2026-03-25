@@ -367,6 +367,7 @@ export function paintDesignerMiniPreview(canvas, opts) {
     logoUrl = null,
     logoPosition = "top-left",
     logoScale = 60,
+    hideLogo = false,
     whiteBg = false,
     previewMode = "full",
     thumbDisplayPx = 72,
@@ -456,10 +457,15 @@ export function paintDesignerMiniPreview(canvas, opts) {
     }
   };
 
-  const runLogoThenText = () =>
-    drawLogoOnCanvas(ctx, W, H, pad, logoUrl, logoPosition, logoScale).then(() => {
+  const runLogoThenText = () => {
+    if (hideLogo) {
+      drawTextLayer();
+      return Promise.resolve();
+    }
+    return drawLogoOnCanvas(ctx, W, H, pad, logoUrl, logoPosition, logoScale).then(() => {
       drawTextLayer();
     });
+  };
 
   if (!imageUrl || !vr) {
     return runLogoThenText();

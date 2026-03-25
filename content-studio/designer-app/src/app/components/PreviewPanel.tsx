@@ -3,6 +3,8 @@ import { Download, ChevronLeft, ChevronRight, Crop, Pencil, Loader2, X } from "l
 import { CropModal } from "./CropModal";
 import type { PreviewToolbarApi } from "@/app/types/previewToolbar";
 import enkryptLogo from "@/assets/enkrypt-logo.png";
+import { pickDesignerLogoUrl } from "../../../../lib/brand/studioBrandBridge.js";
+import { ENKRYPT_PREVIEW_GRADIENT_STOPS } from "@studio-brand";
 import bg1x1 from "@/assets/bg-1x1.png";
 import bg1x1Trns from "@/assets/bg-1x1-trns.png";
 import bg16x9 from "@/assets/placeholder-theme.svg";
@@ -38,6 +40,7 @@ interface PreviewPanelProps {
     logoPosition: string;
     padding: number;
     logoScale: number;
+    hideLogo?: boolean;
     visualImage: string | null;
     size: { width: number; height: number };
     content: { heading: string; subheading: string; footer: string } | null;
@@ -64,7 +67,11 @@ interface PreviewPanelProps {
     variations?: string[];
     activeVariation?: number;
     postSizeId?: string;
+    designerWhiteBg?: boolean;
     visualImageBorderRadius?: number;
+    brandFromStudio?: {
+      logos?: { primary?: string | null; dark?: string | null };
+    } | null;
   } | null;
   shouldRender: number;
   toolbar: PreviewToolbarApi | null;
@@ -132,6 +139,7 @@ export function PreviewPanel({ settings, shouldRender, toolbar }: PreviewPanelPr
   const pad = s?.padding ?? 20;
   const logoPos = s?.logoPosition ?? "top-left";
   const logoScale = s?.logoScale ?? 60;
+  const hideLogo = !!s?.hideLogo;
   const visualImage = s?.visualImage ?? null;
   const content = s?.content ?? null;
   const currentMode = s?.mode ?? "general";
@@ -156,6 +164,10 @@ export function PreviewPanel({ settings, shouldRender, toolbar }: PreviewPanelPr
   };
   const slotGap = s?.slotGap ?? DEFAULT_SLOT_GAP;
   const visualImageBorderRadius = s?.visualImageBorderRadius ?? 12;
+  const designerWhiteBg = !!s?.designerWhiteBg;
+  const logoSrc =
+    pickDesignerLogoUrl(s?.brandFromStudio ?? null, designerWhiteBg) ||
+    enkryptLogo;
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -210,10 +222,13 @@ export function PreviewPanel({ settings, shouldRender, toolbar }: PreviewPanelPr
 
     if (currentMode === "blog") {
       // Blog mode: text overlays on top of full-bleed visual
-      const logoAreaH = Math.min(W, H) / 12 * (logoScale / 100) + pad + slotGap;
+      const logoBlockH = hideLogo
+        ? 0
+        : Math.min(W, H) / 12 * (logoScale / 100) + slotGap;
+      const logoAreaH = logoBlockH + pad;
       const isLogoTop = logoPos.startsWith("top");
-      const visualTopY = isLogoTop ? logoAreaH : pad;
-      const visualBottomLimit = isLogoTop ? H - pad : H - logoAreaH;
+      const visualTopY = isLogoTop ? (hideLogo ? pad : logoAreaH) : pad;
+      const visualBottomLimit = isLogoTop ? H - pad : hideLogo ? H - pad : H - logoAreaH;
       const basicVisualH = visualBottomLimit - visualTopY;
       items.push({ id: "visual", desiredY: visualTopY, h: Math.max(basicVisualH, 100) });
       // Add text slots so advanced settings render overlays
@@ -287,7 +302,7 @@ export function PreviewPanel({ settings, shouldRender, toolbar }: PreviewPanelPr
         drawSlotOutlines();
       }
       drawVisualImage(() => {
-        drawLogo(() => {
+        const afterLogo = () => {
           drawAllText();
           setHasCanvas(true);
           if (pendingExportCallbackRef.current) {
@@ -296,7 +311,9 @@ export function PreviewPanel({ settings, shouldRender, toolbar }: PreviewPanelPr
             skipSlotOutlinesRef.current = false;
             setExportTrigger((t) => t + 1);
           }
-        });
+        };
+        if (hideLogo) afterLogo();
+        else drawLogo(afterLogo);
       });
     }
 
@@ -491,11 +508,11 @@ export function PreviewPanel({ settings, shouldRender, toolbar }: PreviewPanelPr
         cb();
       };
       logoImg.onerror = cb;
-      logoImg.src = enkryptLogo;
+      logoImg.src = logoSrc;
     }
 
     // ── Gradient colors for brand gradient (from CSS --gradient-start / --gradient-end) ──
-    const GRADIENT_STOPS = ["#FF7404", "#FF6F53", "#FF3BA2"];
+    const GRADIENT_STOPS = ENKRYPT_PREVIEW_GRADIENT_STOPS;
 
     // ── Text rendering with per-word styling ──
     function drawAllText() {
@@ -646,7 +663,7 @@ export function PreviewPanel({ settings, shouldRender, toolbar }: PreviewPanelPr
         b: parseInt(h.substring(4, 6), 16),
       };
     }
-  }, [currentSize, pad, logoPos, logoScale, slotGap, visualImage, content, useH, useSH, useF, shouldRender, fs, vSlot, tSlots, currentMode, tColors, exportTrigger, s?.postSizeId, visualImageBorderRadius]);
+  }, [currentSize, pad, logoPos, logoScale, hideLogo, slotGap, visualImage, content, useH, useSH, useF, shouldRender, fs, vSlot, tSlots, currentMode, tColors, exportTrigger, s?.postSizeId, visualImageBorderRadius, logoSrc, designerWhiteBg]);
 
   const handleDownload = () => {
     const canvas = canvasRef.current;

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { writeStudioBrandToSession } from "@/lib/brand/studioBrandBridge";
 
 const DESIGNER_INDEX = "/designer/index.html";
 
@@ -11,9 +12,10 @@ export const CE_DESIGNER_EMBED_VISUAL_MSG = "ce-designer-embed-visual";
  * Call immediately before opening the overlay so the iframe can read on load.
  * @param {string|null} imageUrl
  * @param {{ heading?: string, subheading?: string, footer?: string }|null} designerContent — same JSON step as designer LeftPanel
- * @param {{ postSizeId?: string, designerWhiteBg?: boolean, themeId?: string }|null} [layout] — matches CenterPanel / structure + image APIs
+ * @param {{ postSizeId?: string, designerWhiteBg?: boolean, themeId?: string, hideLogo?: boolean }|null} [layout] — matches CenterPanel / structure + image APIs
+ * @param {object|null} [brandFromStudio] — active brand from Brand Editor (colors, logos, placement); passed to designer iframe
  */
-export function primeDesignerEmbed(imageUrl, designerContent, layout) {
+export function primeDesignerEmbed(imageUrl, designerContent, layout, brandFromStudio = null) {
   try {
     if (imageUrl) sessionStorage.setItem("ce_designer_embed_visual", imageUrl);
     else sessionStorage.removeItem("ce_designer_embed_visual");
@@ -37,13 +39,22 @@ export function primeDesignerEmbed(imageUrl, designerContent, layout) {
       const pid = layout.postSizeId || "1080x1080";
       sessionStorage.setItem("ce_designer_embed_post_size_id", String(pid));
       sessionStorage.setItem("ce_designer_embed_white_bg", layout.designerWhiteBg ? "1" : "0");
-      const tid = layout.themeId != null && String(layout.themeId) !== "" ? String(layout.themeId) : "hooks";
+      const tid = layout.themeId != null && String(layout.themeId) !== "" ? String(layout.themeId) : "none";
       sessionStorage.setItem("ce_designer_embed_theme_id", tid);
+      sessionStorage.setItem(
+        "ce_designer_embed_hide_logo",
+        layout.hideLogo ? "1" : "0"
+      );
     } else {
       sessionStorage.removeItem("ce_designer_embed_post_size_id");
       sessionStorage.removeItem("ce_designer_embed_white_bg");
       sessionStorage.removeItem("ce_designer_embed_theme_id");
+      sessionStorage.removeItem("ce_designer_embed_hide_logo");
     }
+    writeStudioBrandToSession(
+      brandFromStudio,
+      typeof window !== "undefined" ? window.location.origin : ""
+    );
   } catch {
     /* ignore */
   }

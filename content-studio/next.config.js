@@ -7,6 +7,7 @@ const nextConfig = {
   outputFileTracingRoot: path.join(__dirname),
   // Fewer dev-only portal nodes — helps embedded browsers (e.g. Cursor Simple Browser element picker).
   devIndicators: false,
+  serverExternalPackages: ["pdf-parse", "mammoth"],
 };
 
 module.exports = nextConfig;

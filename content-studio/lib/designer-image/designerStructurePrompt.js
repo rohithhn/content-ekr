@@ -62,7 +62,7 @@ function buildLayoutContextLines(postSizeId, designerWhiteBg = false) {
  */
 export function buildDesignerStructureUserPrompt({
   rawContent,
-  themeId = "hooks",
+  themeId = "none",
   postSizeId = "1080x1080",
   designerWhiteBg = false,
   customInstructions = "",

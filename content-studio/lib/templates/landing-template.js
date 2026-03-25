@@ -3,23 +3,32 @@
  *
  * Wraps AI-generated landing page sections in a self-contained HTML document
  * with CSS animations, IntersectionObserver-based scroll reveals, brand theming,
- * animated counters, and responsive layout.
+ * animated counters, Lucide icons (CDN, pinned to lucide-react major), and responsive layout.
  *
  * Visual shell follows Enkrypt AI marketing skill: gradient #FF7404 → #FF3BA2, Inter,
  * header logo swaps with light/dark theme toggle.
  */
 
-const ENKRYPT_BRAND_GRADIENT = "linear-gradient(90deg, #FF7404 0%, #FF3BA2 100%)";
-const ENKRYPT_ORANGE = "#FF7404";
-const ENKRYPT_PINK = "#FF3BA2";
+import {
+  ENKRYPT_GRADIENT_END,
+  ENKRYPT_GRADIENT_START,
+  ENKRYPT_LOGO_FOR_DARK_BACKGROUND,
+  ENKRYPT_LOGO_FOR_LIGHT_BACKGROUND,
+} from "@/lib/brand/enkrypt-defaults";
+
+const ENKRYPT_BRAND_GRADIENT = `linear-gradient(90deg, ${ENKRYPT_GRADIENT_START} 0%, ${ENKRYPT_GRADIENT_END} 100%)`;
+const ENKRYPT_ORANGE = ENKRYPT_GRADIENT_START;
+const ENKRYPT_PINK = ENKRYPT_GRADIENT_END;
+/** Pin to content-studio `lucide-react` so icon names match the app library. */
+const LUCIDE_CDN_URL = "https://unpkg.com/lucide@0.460.0/dist/umd/lucide.min.js";
 
 /**
  * Official Enkrypt lockups in `public/brand/` (white wordmark on dark bg; dark wordmark on light bg).
  * Pass `assetBaseUrl: window.location.origin` from the browser so previews and downloads resolve images.
  */
 export const ENKRYPT_DEFAULT_LANDING_LOGOS = {
-  forDarkBackground: "/brand/enkrypt-logo-dark-bg.png",
-  forLightBackground: "/brand/enkrypt-logo-light-bg.png",
+  forDarkBackground: ENKRYPT_LOGO_FOR_DARK_BACKGROUND,
+  forLightBackground: ENKRYPT_LOGO_FOR_LIGHT_BACKGROUND,
 };
 
 function resolveLandingAssetUrl(path, assetBaseUrl) {
@@ -237,9 +246,17 @@ function buildCSS(brand) {
       border-radius: 12px;
       background: var(--gradient);
       display: flex; align-items: center; justify-content: center;
-      font-size: 1.4rem;
       margin-bottom: 16px;
-      color: white;
+      color: #FFFFFF;
+    }
+    .feature-icon svg {
+      width: 26px;
+      height: 26px;
+      stroke: currentColor;
+      fill: none;
+      stroke-width: 2;
+      stroke-linecap: round;
+      stroke-linejoin: round;
     }
 
     /* ─── How It Works ─────────────────────────────── */
@@ -575,6 +592,10 @@ function buildJS() {
         root.setAttribute('data-theme', st === 'light' ? 'light' : 'dark');
         tbtn.textContent = root.getAttribute('data-theme') === 'dark' ? '\u2600' : '\u263d';
       }
+
+      if (typeof lucide !== 'undefined' && lucide.createIcons) {
+        lucide.createIcons();
+      }
     });
   `;
 }
@@ -692,6 +713,7 @@ export function buildLandingPageHtml(bodyContent, brand, options = {}) {
 <body>
 ${header}
 ${sections}
+<script src="${LUCIDE_CDN_URL}" crossorigin="anonymous"></script>
 <script>${buildJS()}</script>
 </body>
 </html>`;

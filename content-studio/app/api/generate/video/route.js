@@ -42,7 +42,7 @@ export async function POST(request) {
     if (brand?.sample_backgrounds?.length) {
       enhancedPrompt += ` Match the brand's established visual style used in social media backgrounds.`;
     }
-    if (brand?.gradients?.length && brand.gradients[0]?.stops?.length >= 2) {
+    if (brand.primary_as_gradient !== false && brand?.gradients?.length && brand.gradients[0]?.stops?.length >= 2) {
       const g = brand.gradients[0];
       enhancedPrompt += ` Use brand gradient from ${g.stops[0].color} to ${g.stops[g.stops.length - 1].color} in transitions or overlays.`;
     }

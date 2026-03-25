@@ -93,7 +93,7 @@ cp .env.example .env.local
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000).
+Open [http://localhost:3000](http://localhost:3000). If **3000** is busy, run `npm run dev:3001`. If you see **Internal Server Error**, stop the server, run `rm -rf .next`, and start again; if the port is stuck, `lsof -ti:3000 | xargs kill -9`.
 
 ## API Keys
 

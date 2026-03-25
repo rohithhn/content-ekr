@@ -91,6 +91,8 @@ export default defineConfig({
     alias: {
       // Alias @ to the src directory
       '@': path.resolve(__dirname, './src'),
+      /** Shared with Content Studio Workspace + landing — one source for Enkrypt tokens */
+      '@studio-brand': path.resolve(__dirname, '../lib/brand/enkrypt-defaults.js'),
     },
   },
 

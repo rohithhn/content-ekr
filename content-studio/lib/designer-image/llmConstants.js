@@ -1,5 +1,7 @@
 /** Mirrors designer-app/src/app/utils/llmText.ts — do not diverge without updating both. */
 export const ENKRYPT_OPENAI_CHAT_MODEL = "gpt-5-chat-latest";
+/** Content Studio: all text-side steps (structure JSON, visual brief) use Claude when configured. */
+export const ENKRYPT_ANTHROPIC_CHAT_MODEL = "claude-sonnet-4-20250514";
 export const ENKRYPT_GEMINI_CHAT_MODEL = "gemini-2.5-flash";
 
 export function openAiChatCompletionsExtras(model) {

@@ -12,10 +12,16 @@ const KEY_HEADERS = {
   kling_key: "x-kling-key",
 };
 
+function trimKey(v) {
+  if (v == null || typeof v !== "string") return "";
+  return v.replace(/[^\x20-\x7E]/g, "").trim();
+}
+
 function buildHeaders(apiKeys = {}) {
   const headers = { "Content-Type": "application/json" };
   for (const [field, headerName] of Object.entries(KEY_HEADERS)) {
-    if (apiKeys[field]) headers[headerName] = apiKeys[field];
+    const t = trimKey(apiKeys[field]);
+    if (t) headers[headerName] = t;
   }
   return headers;
 }
@@ -52,7 +58,7 @@ export async function generateText({
  */
 export async function generateDesignerStructure({
   rawContent,
-  themeId = "hooks",
+  themeId = "none",
   postSizeId = "1080x1080",
   designerWhiteBg = false,
   customInstructions = "",
@@ -121,6 +127,65 @@ export async function parseUrl(url, apiKeys = {}) {
   if (!response.ok) {
     const error = await response.json();
     throw new Error(error.error || "URL parsing failed");
+  }
+
+  return response.json();
+}
+
+/** Headers for multipart (omit Content-Type so the browser sets the boundary). */
+function buildHeadersMultipart(apiKeys = {}) {
+  const headers = {};
+  const ak = trimKey(apiKeys.anthropic_key);
+  const ok = trimKey(apiKeys.openai_key);
+  if (ak) headers["x-anthropic-key"] = ak;
+  if (ok) headers["x-openai-key"] = ok;
+  return headers;
+}
+
+/**
+ * Claude: article → channel-aware brief (after URL extraction or long paste).
+ */
+export async function prepareSourceArticle({
+  title,
+  content,
+  channels = [],
+  templateId = null,
+  willGenerateImages = true,
+  apiKeys = {},
+}) {
+  const response = await fetch("/api/prepare-source", {
+    method: "POST",
+    headers: buildHeaders(apiKeys),
+    body: JSON.stringify({
+      title: title != null ? String(title) : "",
+      content: String(content || ""),
+      channels,
+      templateId,
+      willGenerateImages: !!willGenerateImages,
+    }),
+  });
+
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err.error || "Source preparation failed");
+  }
+
+  return response.json();
+}
+
+/**
+ * Claude: PDF / DOCX / image → same brief format (multipart FormData).
+ */
+export async function analyzeUploadedFile(formData, apiKeys = {}) {
+  const response = await fetch("/api/analyze-file", {
+    method: "POST",
+    headers: buildHeadersMultipart(apiKeys),
+    body: formData,
+  });
+
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err.error || "File analysis failed");
   }
 
   return response.json();

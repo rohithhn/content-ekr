@@ -1,10 +1,34 @@
 # content-engine
 
+## Local dev (Content Studio)
+
+From the **repo root** (after `npm install` in `content-studio/`):
+
+```bash
+npm run dev
+```
+
+Or from **`content-studio/`**:
+
+```bash
+cd content-studio && npm install && npm run dev
+```
+
+Open **http://localhost:3000** — the dev server uses **port 3000** by default (standard Next.js).
+
+If the tab stays blank, shows **Internal Server Error**, or spins forever:
+
+1. Confirm nothing else is using **3000**, or run `cd content-studio && npm run dev:3001` to use port 3001 instead.
+2. Clear a stuck Next process: `lsof -ti:3000 | xargs kill -9`, then run `npm run dev` again.
+3. Clear a corrupted dev cache: `rm -rf content-studio/.next`, then `npm run dev` again.
+
+---
+
 ## Vercel
 
 ### Your files stay in the repo
 
-Setting **Root Directory** on Vercel only tells their servers **which folder to build**. It does **not** delete, move, or drop **`Content/`**, **`visual designer/`**, **`.cursor/`**, or anything else from GitHub or your machine. The full monorepo stays as-is; Vercel just runs `npm install` / `next build` **inside** `content-studio/`.
+Setting **Root Directory** on Vercel only tells their servers **which folder to build**. The rest of the repo (e.g. **`.cursor/`**) stays in Git as-is; Vercel runs `npm install` / `next build` **inside** `content-studio/`.
 
 ### One-time project settings (avoids most Vercel errors)
 

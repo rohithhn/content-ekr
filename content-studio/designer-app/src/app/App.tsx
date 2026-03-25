@@ -15,6 +15,19 @@ import { TextToolsSplitLayout } from "./components/TextToolsSplitLayout";
 import { TextOutputPanel } from "./components/TextOutputPanel";
 import type { PreviewToolbarApi } from "./types/previewToolbar";
 import type { AppMode } from "./types/appMode";
+import { readAndClearStudioBrandSession } from "../../../lib/brand/studioBrandBridge.js";
+
+/** Serialized from Content Studio Brand Editor → sessionStorage → embed */
+interface StudioBrandEmbedPayload {
+  logoPlacement: string;
+  logos: { primary: string | null; dark: string | null };
+  colors: Record<string, string> | null;
+  typography: { heading_font?: string; body_font?: string } | null;
+  company_name: string;
+  tagline: string;
+  logosDescription: string;
+  visual_style: { image_style?: string; icon_style?: string } | null;
+}
 
 /* ── Error Boundary ── */
 interface EBState {
@@ -99,6 +112,8 @@ interface Settings {
   logoPosition: string;
   padding: number;
   logoScale: number;
+  /** When true, preview export has no brand mark (Logo & Spacing) */
+  hideLogo?: boolean;
   visualImage: string | null;
   size: { width: number; height: number };
   content: GeneratedContent | null;
@@ -164,6 +179,8 @@ interface Settings {
   designerWhiteBg?: boolean;
   /** Corner radius (px at export resolution) for the generated visual in the preview slot */
   visualImageBorderRadius?: number;
+  /** Injected when opened from Content Studio — drives preview logo + image prompts */
+  brandFromStudio?: StudioBrandEmbedPayload | null;
 }
 
 export default function App() {
@@ -172,11 +189,12 @@ export default function App() {
   const [writerOutput, setWriterOutput] = useState("");
   const [researcherOutput, setResearcherOutput] = useState("");
   const [settings, setSettings] = useState<Settings | null>({
-    theme: "hooks",
-    selectedThemes: ["hooks"],
+    theme: "none",
+    selectedThemes: ["none"],
     logoPosition: "top-left",
     padding: 20,
     logoScale: 60,
+    hideLogo: false,
     visualImage: null,
     size: { width: 1080, height: 1080 },
     content: null,
@@ -288,6 +306,20 @@ export default function App() {
         layoutPatch.theme = themeStored;
         layoutPatch.selectedThemes = [themeStored];
       }
+      const hideLogoStored = sessionStorage.getItem("ce_designer_embed_hide_logo");
+      if (hideLogoStored !== null) {
+        sessionStorage.removeItem("ce_designer_embed_hide_logo");
+        layoutPatch.hideLogo = hideLogoStored === "1";
+      }
+
+      const studioBrand = readAndClearStudioBrandSession() as StudioBrandEmbedPayload | null;
+      if (studioBrand && typeof studioBrand === "object") {
+        (layoutPatch as Partial<Settings>).brandFromStudio = studioBrand;
+        if (studioBrand.logoPlacement) {
+          (layoutPatch as { logoPosition?: string }).logoPosition =
+            studioBrand.logoPlacement;
+        }
+      }
 
       const hasLayout = Object.keys(layoutPatch).length > 0;
       if (visual || hasText || hasLayout) {
@@ -370,7 +402,7 @@ export default function App() {
         const themeId =
           settings.theme ||
           (settings.selectedThemes && settings.selectedThemes[0]) ||
-          "hooks";
+          "none";
         window.parent?.postMessage(
           {
             type: "ce-designer-embed-settings",
@@ -378,6 +410,7 @@ export default function App() {
               postSizeId,
               designerWhiteBg: !!settings.designerWhiteBg,
               themeId,
+              hideLogo: !!settings.hideLogo,
             },
           },
           window.location.origin,
@@ -395,6 +428,7 @@ export default function App() {
     settings?.size?.height,
     settings?.theme,
     settings?.selectedThemes?.join(","),
+    settings?.hideLogo,
   ]);
 
   /** Content Studio overlay: swap hero image without reloading the iframe */

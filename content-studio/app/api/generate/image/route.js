@@ -26,7 +26,8 @@ const OPENAI_IMAGE_MODEL_LEGACY =
  *   designerThemeId?: string,
  *   extractedContent?: { heading, subheading, footer },
  *   omitContentTextInImage?: boolean — default true (same as designer “Generate visual”: supporting bitmap only; H/S/F composed by app)
- *   imageProvider?: "openai" | "gemini" — for buildVisualBrief chat step
+ *   designerHideLogo?: boolean — matches designer “Hide logo”; image prompt omits logo placement line
+ *   imageProvider?: "openai" | "gemini" — fallback when no Anthropic key (visual brief chat step)
  * }
  */
 export async function POST(request) {
@@ -42,11 +43,12 @@ export async function POST(request) {
       designerImage = true,
       postSizeId = "1080x1080",
       designerWhiteBg = false,
-      designerThemeId = "hooks",
+      designerThemeId = "none",
       extractedContent: extractedFromClient,
       imageProvider = "openai",
       /** false = paint heading/subheading/footer into the image; true = designer default (visual only) */
       omitContentTextInImage = true,
+      designerHideLogo = false,
     } = body;
 
     if (provider === "openai") {
@@ -62,6 +64,10 @@ export async function POST(request) {
       }
 
       const client = new OpenAI({ apiKey });
+      const anthropicKey =
+        request.headers.get("x-anthropic-key") || process.env.ANTHROPIC_API_KEY || "";
+      const visualBriefApiKey = (anthropicKey || apiKey).replace(/[^\x20-\x7E]/g, "").trim();
+      const visualBriefProvider = anthropicKey ? "claude" : imageProvider === "gemini" ? "gemini" : "openai";
 
       if (designerImage) {
         const size = postSizeIdToCanvasSize(
@@ -104,9 +110,11 @@ export async function POST(request) {
             postSizeId,
             headerModeDesigner: true,
             apiKey,
-            provider: imageProvider === "gemini" ? "gemini" : "openai",
+            visualBriefApiKey,
+            visualBriefProvider,
             omitContentTextInImage,
             variationIdx: i,
+            layoutOverrides: { hideLogo: !!designerHideLogo },
           });
 
           const response = await client.images.generate({

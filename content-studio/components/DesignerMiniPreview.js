@@ -17,6 +17,7 @@ export default function DesignerMiniPreview({
   postSizeId = "1080x1080",
   heightPx = 140,
   whiteBg = false,
+  hideLogo = false,
   designerContent = null,
   onOpenDesigner,
   slotLabel,
@@ -62,6 +63,7 @@ export default function DesignerMiniPreview({
       imageUrl,
       content,
       whiteBg,
+      hideLogo,
       previewMode: "full",
     }).then(() => {
       if (!cancelled) recomputeScale();
@@ -69,7 +71,7 @@ export default function DesignerMiniPreview({
     return () => {
       cancelled = true;
     };
-  }, [imageUrl, sourceText, postSizeId, whiteBg, designerContent, recomputeScale]);
+  }, [imageUrl, sourceText, postSizeId, whiteBg, hideLogo, designerContent, recomputeScale]);
 
   const { width: iw, height: ih } = getDesignerCanvasDimensions(postSizeId);
 

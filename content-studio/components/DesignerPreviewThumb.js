@@ -24,6 +24,7 @@ export default function DesignerPreviewThumb({
   logoUrl,
   postSizeId = DESIGNER_EMBED_THUMB_POST_SIZE,
   whiteBg = false,
+  hideLogo = false,
   /** From designer structure API — same slots as designer-app LeftPanel */
   designerContent = null,
 }) {
@@ -62,6 +63,7 @@ export default function DesignerPreviewThumb({
       logoUrl: logoUrl || null,
       logoPosition: DESIGNER_EMBED_DEFAULT_LOGO_POSITION,
       logoScale: DESIGNER_EMBED_DEFAULT_LOGO_SCALE,
+      hideLogo,
       whiteBg,
       previewMode: "thumb",
       thumbDisplayPx: THUMB_PX,
@@ -71,7 +73,7 @@ export default function DesignerPreviewThumb({
     return () => {
       cancelled = true;
     };
-  }, [imageUrl, sourceText, logoUrl, postSizeId, whiteBg, designerContent, recomputeScale]);
+  }, [imageUrl, sourceText, logoUrl, postSizeId, whiteBg, hideLogo, designerContent, recomputeScale]);
 
   const { width: iw, height: ih } = getDesignerCanvasDimensions(postSizeId);
 

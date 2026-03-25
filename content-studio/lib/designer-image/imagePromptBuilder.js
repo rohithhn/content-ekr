@@ -2,7 +2,9 @@
  * Mirrors designer-app/src/app/utils/imagePromptBuilder.ts — keep prompts identical.
  */
 
+import Anthropic from "@anthropic-ai/sdk";
 import {
+  ENKRYPT_ANTHROPIC_CHAT_MODEL,
   ENKRYPT_GEMINI_CHAT_MODEL,
   ENKRYPT_OPENAI_CHAT_MODEL,
   openAiChatCompletionsExtras,
@@ -107,6 +109,21 @@ EXTRACTED FOOTER: ${content.footer}
   const key = apiKey.replace(/[^\x20-\x7E]/g, "").trim();
 
   try {
+    if (provider === "claude") {
+      const client = new Anthropic({ apiKey: key });
+      const msg = await client.messages.create({
+        model: ENKRYPT_ANTHROPIC_CHAT_MODEL,
+        max_tokens: 700,
+        messages: [{ role: "user", content: prompt }],
+      });
+      const text = msg.content
+        .filter((b) => b.type === "text")
+        .map((b) => b.text)
+        .join("\n")
+        .trim();
+      return text && text.length > 20 ? text : getFallbackVisualBrief(content);
+    }
+
     if (provider === "openai") {
       const res = await fetch("https://api.openai.com/v1/chat/completions", {
         method: "POST",

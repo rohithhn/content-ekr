@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
 import { buildSystemPrompt } from "@/lib/prompts/system-prompts";
+import { composeSystemPromptWithEnkryptSkill } from "@/lib/prompts/load-enkrypt-frontend-skill";
 
 /**
  * POST /api/generate/text
@@ -40,18 +41,25 @@ export async function POST(request) {
 
     const client = new Anthropic({ apiKey });
 
-    // Build the system prompt from channel + template + brand
-    const systemPrompt = buildSystemPrompt({
-      channel,
-      templateId: templateId || null,
-      brand: brand || null,
-      numVariants,
-    });
+    // Channel + template + brand; landing channel also gets full enkrypt-frontend-design skill body (bundled markdown).
+    const systemPrompt = composeSystemPromptWithEnkryptSkill(
+      buildSystemPrompt({
+        channel,
+        templateId: templateId || null,
+        brand: brand || null,
+        numVariants,
+      }),
+      channel
+    );
 
-    // Construct user message with tone override if specified
+    // Landing: frame source/topic as the only brief (no manual skill paste required).
     let userMessage = input;
+    if (channel === "landing") {
+      userMessage = `[LANDING PAGE — source-driven task]
+Produce only the <section>…</section> HTML blocks required by the system prompt (Enkrypt marketing shell, Lucide data-lucide icons in .feature-icon, etc.). Derive headlines, benefits, stats, and FAQs from the material below. Do not ask for extra pastes or omit the skill rules.\n\n---\n\n${userMessage}`;
+    }
     if (tone && tone !== "Professional") {
-      userMessage = `[TONE: ${tone} — adjust the voice and energy level to match this tone while maintaining brand guidelines]\n\n${input}`;
+      userMessage = `[TONE: ${tone} — adjust the voice and energy level to match this tone while maintaining brand guidelines]\n\n${userMessage}`;
     }
 
     if (stream) {

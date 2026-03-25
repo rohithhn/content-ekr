@@ -22,6 +22,15 @@ import {
   buildNumberedBackgroundRule,
   isDesignerTrnsPostSize,
 } from "../../../../lib/designer-image/buildDesignerOpenAiPrompt.js";
+import {
+  buildDesignerBrandColorRules,
+  DEFAULT_DESIGNER_BRAND_COLOR_RULES,
+} from "../../../../lib/brand/studioBrandBridge.js";
+import {
+  ENKRYPT_DESIGNER_DEFAULT_PALETTE,
+  ENKRYPT_DESIGNER_SEMANTIC_COLORS as BRAND_COLORS,
+  createEnkryptNoTemplateTheme,
+} from "@studio-brand";
 
 /* ── Types ── */
 interface GeneratedContent {
@@ -59,6 +68,7 @@ interface SettingsPayload {
   logoPosition: string;
   padding: number;
   logoScale: number;
+  hideLogo?: boolean;
   visualImage: string | null;
   size: { width: number; height: number };
   content: GeneratedContent | null;
@@ -84,6 +94,8 @@ interface SettingsPayload {
   /** Designer tab only — image generation uses solid white background when true */
   designerWhiteBg?: boolean;
   visualImageBorderRadius?: number;
+  /** From Content Studio Brand Editor (embed) */
+  brandFromStudio?: Record<string, unknown> | null;
 }
 
 interface BlogSection {
@@ -118,20 +130,6 @@ interface LeftPanelProps {
 /* ── Template passwords ── */
 const TEMPLATE_PASSWORDS = ["Enkryptai", "Rohith"];
 
-/* ── Brand default colors (from design system CSS variables) ── */
-const BRAND_COLORS = {
-  gradientStart: "#FF7404",  // var(--gradient-start)
-  gradientEnd: "#FF3BA2",    // var(--gradient-end)
-  danger: "#D92D20",         // var(--destructive) — red for danger/warning
-  secure: "#16B364",         // green for secure/success
-  text: "#1A1A1A",           // near-black for readable text
-  muted: "#414651",          // var(--foreground) — secondary text
-  cardBg: "#FFFFFF",         // white card backgrounds
-  cardBorder: "#D5D7DA",     // var(--border)
-};
-
-const BRAND_PALETTE = [BRAND_COLORS.gradientStart, BRAND_COLORS.gradientEnd, BRAND_COLORS.danger, BRAND_COLORS.secure, BRAND_COLORS.text, BRAND_COLORS.cardBg];
-
 interface ThemeItem {
   id: string;
   label: string;
@@ -143,16 +141,8 @@ interface ThemeItem {
   isNone?: boolean;
 }
 
-/* ── No Template option ── */
-const NO_TEMPLATE_THEME: ThemeItem = {
-  id: "none",
-  label: "No Template",
-  image: "",
-  promptContext: "Style: clean, modern, professional social media post. Use the brand gradient (orange #FF7404 to pink #FF3BA2) for icons and decorative elements. Red (#D92D20) for danger/warning elements. Green (#16B364) for success/secure elements. Near-black (#1A1A1A) for all body text. White card backgrounds with subtle borders. Tone: polished, brand-consistent.",
-  visualPrompt: "Create a clean, modern social media visual with no specific template. Use a professional layout with rounded cards, clean icons, and clear visual hierarchy. Icons and decorative elements should use a warm gradient from orange (#FF7404) to pink (#FF3BA2). Any danger/warning elements in red (#D92D20). Any success/secure elements in green (#16B364). All text in near-black (#1A1A1A). White (#FFFFFF) card backgrounds with subtle gray (#D5D7DA) borders.",
-  palette: BRAND_PALETTE,
-  isNone: true,
-};
+/* ── No Template option (copy + palette from @studio-brand) ── */
+const NO_TEMPLATE_THEME: ThemeItem = createEnkryptNoTemplateTheme();
 
 /* ── Theme data ── */
 const defaultThemes: ThemeItem[] = [
@@ -928,6 +918,7 @@ export function LeftPanel({ onContentGenerated, onSettingsChange, onGenerateVisu
   const [logoPosition, setLogoPosition] = useState("top-left");
   const [padding, setPadding] = useState(20);
   const [logoScale, setLogoScale] = useState(60);
+  const [hideLogo, setHideLogo] = useState(false);
   const [visualImage, setVisualImage] = useState<string | null>(null);
   const [size, setSize] = useState({ width: 1080, height: 1080 });
   const [step, setStep] = useState(1);
@@ -1039,7 +1030,7 @@ export function LeftPanel({ onContentGenerated, onSettingsChange, onGenerateVisu
         image: modal.pendingData.image || "",
         promptContext: modal.pendingData.promptContext || "",
         visualPrompt: modal.pendingData.visualPrompt || "",
-        palette: modal.pendingData.palette || ["#7F56D9", "#FF7404", "#FF3BA2", "#FDDCB5", "#FFF8F2", "#333333"],
+        palette: modal.pendingData.palette || ["#7F56D9", ...ENKRYPT_DESIGNER_DEFAULT_PALETTE],
         isCustom: true,
       };
       saveCustomTemplates([...customTemplates, newT]);
@@ -1078,7 +1069,7 @@ export function LeftPanel({ onContentGenerated, onSettingsChange, onGenerateVisu
           image: dataUrl,
           promptContext: "",
           visualPrompt: "",
-          palette: ["#7F56D9", "#FF7404", "#FF3BA2", "#FDDCB5", "#FFF8F2", "#333333"],
+          palette: ["#7F56D9", ...ENKRYPT_DESIGNER_DEFAULT_PALETTE],
         },
       });
     };
@@ -1092,12 +1083,12 @@ export function LeftPanel({ onContentGenerated, onSettingsChange, onGenerateVisu
       return;
     }
     onSettingsChange({
-      theme, selectedThemes, logoPosition, padding, logoScale, visualImage, size, content: generated,
+      theme, selectedThemes, logoPosition, padding, logoScale, hideLogo, visualImage, size, content: generated,
       useHeading, useSubheading, useFooter,
       fontSettings, visualSlot, textSlots, mode, textColorSettings,
       variations, activeVariation, ...overrides,
     });
-  }, [theme, selectedThemes, logoPosition, padding, logoScale, visualImage, size, generated, useHeading, useSubheading, useFooter, fontSettings, visualSlot, textSlots, mode, textColorSettings, variations, activeVariation, onSettingsChange, settingsFromProps]);
+  }, [theme, selectedThemes, logoPosition, padding, logoScale, hideLogo, visualImage, size, generated, useHeading, useSubheading, useFooter, fontSettings, visualSlot, textSlots, mode, textColorSettings, variations, activeVariation, onSettingsChange, settingsFromProps]);
 
   useEffect(() => {
     activeVariationRef.current = activeVariation;
@@ -1139,12 +1130,20 @@ export function LeftPanel({ onContentGenerated, onSettingsChange, onGenerateVisu
         setEditValues(c);
       }
     }
+    if (settingsFromProps.logoPosition) {
+      setLogoPosition(settingsFromProps.logoPosition);
+    }
+    if (typeof settingsFromProps.hideLogo === "boolean") {
+      setHideLogo(settingsFromProps.hideLogo);
+    }
   }, [
     isEmbed,
     settingsFromProps?.visualImage,
     settingsFromProps?.variations,
     settingsFromProps?.activeVariation,
     settingsFromProps?.content,
+    settingsFromProps?.logoPosition,
+    settingsFromProps?.hideLogo,
   ]);
 
   const showError = (msg: string) => { setError(msg); setTimeout(() => setError(""), 5000); };
@@ -1187,13 +1186,15 @@ export function LeftPanel({ onContentGenerated, onSettingsChange, onGenerateVisu
           : "1080x1080";
     const designerWhiteBgStructure =
       headerMode === "designer" && !!settingsFromProps?.designerWhiteBg;
+    const hideForStructure = !!(settingsFromProps?.hideLogo ?? hideLogo);
     return buildDesignerPostLayoutContext(
       logoPosition,
       logoScale,
       padding,
       size,
       designerWhiteBgStructure,
-      postSizeIdForStructure
+      postSizeIdForStructure,
+      hideForStructure
     );
   };
 
@@ -1301,13 +1302,15 @@ export function LeftPanel({ onContentGenerated, onSettingsChange, onGenerateVisu
           ? "1920x1080"
           : "1080x1080";
     const whiteForPrompt = headerMode === "designer" && !!settingsFromProps?.designerWhiteBg;
+    const hideForPrompt = !!(settingsFromProps?.hideLogo ?? hideLogo);
     const layoutCtx = buildDesignerPostLayoutContext(
       logoPosition,
       logoScale,
       padding,
       size,
       whiteForPrompt,
-      postSizeIdForPrompt
+      postSizeIdForPrompt,
+      hideForPrompt
     );
     const critBg = buildCriticalBackgroundParagraph(whiteForPrompt, postSizeIdForPrompt);
     const rule1Bg = buildNumberedBackgroundRule(whiteForPrompt, postSizeIdForPrompt);
@@ -1364,8 +1367,19 @@ export function LeftPanel({ onContentGenerated, onSettingsChange, onGenerateVisu
 
     const isNoTemplate = selectedTheme.isNone;
 
-    // Brand color instructions that apply to ALL generations (with or without template)
-    const brandColorRules = `\nBRAND COLOR GUIDANCE (follow strictly):\n- Primary accents: brand gradient orange #FF7404 → pink #FF3BA2 for icons, highlights, and decorative elements.\n- RED COLOR — this is a targeted rule, not a generic guideline: The CONTENT & VISUAL DIRECTION section below contains a VISUAL BRIEF with a ⚑ RED COLOR INSTRUCTION and a RED DECISION field. Read those fields now. If RED DECISION says ACTIVE, apply red #D92D20 to ONLY the exact element(s) named — do not use red anywhere else. If RED DECISION says INACTIVE, do NOT use red anywhere in this image — not as a border, frame, accent, glow, or any form of emphasis. This rule overrides any default behavior.\n- Extended accents: electric teal #06B6D4 or violet #7C3AED may be used as secondary accents when specified in the brief's PALETTE field.\n- Success/protected/secure: green #16B364 only for explicitly positive/secure/approved states.\n- Backgrounds: follow the PALETTE field in the brief. Dark backgrounds (#0A0F1E, #0D0F14) are valid and preferred for security/threat content. On dark backgrounds, use cool white #F0F4FF for labels and annotations.`;
+    // Brand color instructions — Content Studio Brand Editor overrides Enkrypt defaults when present
+    const brandColorRules =
+      buildDesignerBrandColorRules(
+        settingsFromProps?.brandFromStudio as Parameters<
+          typeof buildDesignerBrandColorRules
+        >[0],
+      ) ?? DEFAULT_DESIGNER_BRAND_COLOR_RULES;
+
+    const paletteAccentHint =
+      settingsFromProps?.brandFromStudio &&
+      (settingsFromProps.brandFromStudio as { colors?: unknown }).colors
+        ? "Use the hex colors from BRAND COLOR GUIDANCE above for accents, cards, and UI hierarchy."
+        : "Brand gradient (orange #FF7404 to pink #FF3BA2) for accents; red (#D92D20) for danger/warning; green (#16B364) for success.";
 
     const templateCtx = isNoTemplate
       ? `\nYou have full creative freedom for the layout and style. Create a clean, modern, professional social media visual.\n${selectedTheme.visualPrompt}`
@@ -1373,8 +1387,8 @@ export function LeftPanel({ onContentGenerated, onSettingsChange, onGenerateVisu
 
     const contentAndVisualBlock = buildContentAndVisualBlock(content, visualBrief ?? null, !!omitContentTextInImage);
     const imgPrompt = omitContentTextInImage
-      ? `You are an expert graphic designer. Generate a supporting visual (illustration, diagram, or graphic) that will be composed with text displayed separately by the app.\n\n${templateCtx}\n${brandColorRules}\n\n--- CONTENT & VISUAL DIRECTION ---\n${contentAndVisualBlock}\n---\n\n${layoutCtx}\n${visualSlotSizeCtx}\n\nREQUIREMENTS:\n${critBg}\n${rule1Bg}\n2. NO THICK BORDER OR FRAME — Do not add any thick border, frame, or outer margin in brand colors (no orange, pink, peach, or gradient band around the image or around inner containers). No thick colored strip, decorative edge, or "brand frame." Content must fill the slot edge to edge with zero wasted space. Inside cards/containers, keep inner padding minimal — do not create a wide empty "border" inside white boxes; let content use the space.\n3. CURVED BORDERS — Use rounded, curved corners for the overall visual and any main containers; no sharp rectangular edges.\n4. NO LOGO — Do not draw any logo, brand mark, or "Enkrypt". Leave the ${logoPosition} area clear.\n5. NO PRIMARY POST COPY IN-PAINT — The headline, subheading, and footer are NOT part of this image. Never paint them as title or body text; only secondary labels/stats/diagram text per the VISUAL BRIEF.\n6. Use the color palette as guidance: ${paletteStr}. Brand gradient (orange #FF7404 to pink #FF3BA2) for accents; red (#D92D20) for danger/warning; green (#16B364) for success.\n7. ASPECT RATIO: ${size.width === size.height ? "Square (1:1)" : "Landscape (16:9)"}.${aspectExtra}${sourceImageCtx}${variationHint}${designerWhiteBgClause}${designerTrnsClause}`
-      : `You are an expert graphic designer and visual storyteller. The user has already provided three pieces of content. Your job is to generate an image that brings this content to life — the image must prominently feature and be built around these three elements.\n\n${templateCtx}\n${brandColorRules}\n\n--- CONTENT & VISUAL DIRECTION ---\n${contentAndVisualBlock}\n---\n\nGenerate a visual that:\n- Renders the heading, subheading, and footer as clear, legible text in the image. Place them where they best support the composition.\n- Can include as much additional text as you want: bullet points, labels, stats, captions, annotations, list items, callouts — anything that supports the message.\n- Uses your own layout and composition. Apply the theme's colors and tone. Include icons, illustrations, diagrams, charts, or any visual elements that fit the topic.\n- Feels complete and polished — whatever style best serves the message.\n\n${layoutCtx}\n${visualSlotSizeCtx}\n\nREQUIREMENTS:\n${critBg}\n${rule1Bg}\n2. NO THICK BORDER OR FRAME — Do not add any thick border, frame, or outer margin in brand colors (no orange, pink, peach, or gradient band around the image or around inner containers). No thick colored strip, decorative edge, or "brand frame." Content must fill the slot edge to edge with zero wasted space. Inside cards/containers, keep inner padding minimal — do not create a wide empty "border" inside white boxes; let content use the space.\n3. CURVED BORDERS — Use rounded, curved corners for the overall visual and any main containers; no sharp rectangular edges.\n4. Include the three content pieces above as text in the image. You may use any typography, size, and placement that works. Add any other text that strengthens the visual.\n5. NO LOGO — Do not draw any logo, brand mark, or "Enkrypt". Leave the ${logoPosition} area clear.\n6. Use the color palette as guidance: ${paletteStr}. Brand gradient (orange #FF7404 to pink #FF3BA2) for accents; red (#D92D20) for danger/warning; green (#16B364) for success; near-black for body text where readable.\n7. ASPECT RATIO: ${size.width === size.height ? "Square (1:1)" : "Landscape (16:9)"}.${aspectExtra}\n8. No arbitrary limits on layout, amount of text, or style — do what best communicates the heading, subheading, and footer.${sourceImageCtx}${variationHint}${designerWhiteBgClause}${designerTrnsClause}`;
+      ? `You are an expert graphic designer. Generate a supporting visual (illustration, diagram, or graphic) that will be composed with text displayed separately by the app.\n\n${templateCtx}\n${brandColorRules}\n\n--- CONTENT & VISUAL DIRECTION ---\n${contentAndVisualBlock}\n---\n\n${layoutCtx}\n${visualSlotSizeCtx}\n\nREQUIREMENTS:\n${critBg}\n${rule1Bg}\n2. NO THICK BORDER OR FRAME — Do not add any thick border, frame, or outer margin in brand colors (no orange, pink, peach, or gradient band around the image or around inner containers). No thick colored strip, decorative edge, or "brand frame." Content must fill the slot edge to edge with zero wasted space. Inside cards/containers, keep inner padding minimal — do not create a wide empty "border" inside white boxes; let content use the space.\n3. CURVED BORDERS — Use rounded, curved corners for the overall visual and any main containers; no sharp rectangular edges.\n4. NO LOGO — Do not draw any logo, brand mark, or company wordmark in-image. Leave the ${logoPosition} area clear for compositing.\n5. NO PRIMARY POST COPY IN-PAINT — The headline, subheading, and footer are NOT part of this image. Never paint them as title or body text; only secondary labels/stats/diagram text per the VISUAL BRIEF.\n6. Use the color palette as guidance: ${paletteStr}. ${paletteAccentHint}\n7. ASPECT RATIO: ${size.width === size.height ? "Square (1:1)" : "Landscape (16:9)"}.${aspectExtra}${sourceImageCtx}${variationHint}${designerWhiteBgClause}${designerTrnsClause}`
+      : `You are an expert graphic designer and visual storyteller. The user has already provided three pieces of content. Your job is to generate an image that brings this content to life — the image must prominently feature and be built around these three elements.\n\n${templateCtx}\n${brandColorRules}\n\n--- CONTENT & VISUAL DIRECTION ---\n${contentAndVisualBlock}\n---\n\nGenerate a visual that:\n- Renders the heading, subheading, and footer as clear, legible text in the image. Place them where they best support the composition.\n- Can include as much additional text as you want: bullet points, labels, stats, captions, annotations, list items, callouts — anything that supports the message.\n- Uses your own layout and composition. Apply the theme's colors and tone. Include icons, illustrations, diagrams, charts, or any visual elements that fit the topic.\n- Feels complete and polished — whatever style best serves the message.\n\n${layoutCtx}\n${visualSlotSizeCtx}\n\nREQUIREMENTS:\n${critBg}\n${rule1Bg}\n2. NO THICK BORDER OR FRAME — Do not add any thick border, frame, or outer margin in brand colors (no orange, pink, peach, or gradient band around the image or around inner containers). No thick colored strip, decorative edge, or "brand frame." Content must fill the slot edge to edge with zero wasted space. Inside cards/containers, keep inner padding minimal — do not create a wide empty "border" inside white boxes; let content use the space.\n3. CURVED BORDERS — Use rounded, curved corners for the overall visual and any main containers; no sharp rectangular edges.\n4. Include the three content pieces above as text in the image. You may use any typography, size, and placement that works. Add any other text that strengthens the visual.\n5. NO LOGO — Do not draw any logo, brand mark, or company wordmark in-image. Leave the ${logoPosition} area clear for compositing.\n6. Use the color palette as guidance: ${paletteStr}. ${paletteAccentHint} Near-black for body text where readable.\n7. ASPECT RATIO: ${size.width === size.height ? "Square (1:1)" : "Landscape (16:9)"}.${aspectExtra}\n8. No arbitrary limits on layout, amount of text, or style — do what best communicates the heading, subheading, and footer.${sourceImageCtx}${variationHint}${designerWhiteBgClause}${designerTrnsClause}`;
 
     try {
       if (provider === "openai") {
@@ -2615,6 +2629,19 @@ Return ONLY a valid JSON array with 3 to 5 items — no markdown, no explanation
 
           <CollapsibleSection title="Logo & Spacing" icon="📍" defaultOpen={false}>
             <div className="space-y-4">
+              <label className="flex items-center justify-between gap-2 cursor-pointer rounded-[var(--radius)] border border-border px-3 py-2">
+                <span style={{ fontSize: "var(--text-sm)", fontWeight: 600, color: "var(--foreground)" }}>Hide logo</span>
+                <input
+                  type="checkbox"
+                  checked={hideLogo}
+                  onChange={(e) => {
+                    const v = e.target.checked;
+                    setHideLogo(v);
+                    updateSettings({ hideLogo: v });
+                  }}
+                  className="w-4 h-4 cursor-pointer accent-primary shrink-0"
+                />
+              </label>
               <div>
                 <FieldLabel>Logo Position</FieldLabel>
                 <div className="grid grid-cols-3 gap-1.5">
@@ -2863,6 +2890,19 @@ Return ONLY a valid JSON array with 3 to 5 items — no markdown, no explanation
                   onChange={(id) => { const [w, h] = id.split("x").map(Number); const sz = { width: w, height: h }; setSize(sz); updateSettings({ size: sz }); }}
                 />
               </div>
+              <label className="flex items-center justify-between gap-2 cursor-pointer rounded-[var(--radius)] border border-border px-3 py-2">
+                <span style={{ fontSize: "var(--text-sm)", fontWeight: 600, color: "var(--foreground)" }}>Hide logo</span>
+                <input
+                  type="checkbox"
+                  checked={hideLogo}
+                  onChange={(e) => {
+                    const v = e.target.checked;
+                    setHideLogo(v);
+                    updateSettings({ hideLogo: v });
+                  }}
+                  className="w-4 h-4 cursor-pointer accent-primary shrink-0"
+                />
+              </label>
               <div>
                 <FieldLabel>Logo Position</FieldLabel>
                 <div className="grid grid-cols-3 gap-1.5">
