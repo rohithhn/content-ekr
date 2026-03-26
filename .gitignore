@@ -14,15 +14,14 @@ build/
 .turbo/
 .cache/
 
-# Env & secrets
+# Environment files (contain secrets)
 .env
+.env.local
 .env.*
 !.env.example
-
-# OS & editor
-.DS_Store
-*.pem
-Thumbs.db
+.env.development.local
+.env.test.local
+.env.production.local
 
 # Debug / logs
 npm-debug.log*
@@ -30,13 +29,27 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
-# Vercel
-.vercel
+# TypeScript
+next-env.d.ts
 
-# IDE
+# IDE / Editor
+.vscode/
 .idea/
 *.swp
 *.swo
+*~
 
-# Test
+# OS files
+.DS_Store
+*.pem
+Thumbs.db
+
+# Vercel
+.vercel
+
+# Testing
 coverage/
+
+# Misc
+*.tgz
+.specstory/
