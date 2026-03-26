@@ -1,3 +1,5 @@
+import { DESIGNER_OPENAI_IMAGE_MODEL_DEFAULT } from "./openaiImageModelId.js";
+
 /** Mirrors designer-app/src/app/utils/llmText.ts — do not diverge without updating both. */
 export const ENKRYPT_OPENAI_CHAT_MODEL = "gpt-5-chat-latest";
 /** Content Studio: designer structure JSON + visual brief (API routes / shared builders). */
@@ -13,5 +15,5 @@ export function openAiChatCompletionsExtras(model) {
   return {};
 }
 
-/** Designer visual generation uses this model (LeftPanel generateSingleVisual). */
-export const DESIGNER_OPENAI_IMAGE_MODEL = "gpt-image-1";
+/** Designer visual generation default when no `openaiImageModel` is passed (API route). */
+export const DESIGNER_OPENAI_IMAGE_MODEL = DESIGNER_OPENAI_IMAGE_MODEL_DEFAULT;

@@ -7,13 +7,17 @@ import {
   buildDesignerOpenAiImagePrompt,
 } from "@/lib/designer-image/buildDesignerOpenAiPrompt";
 import { serializeStudioBrandForDesigner } from "@/lib/brand/studioBrandBridge";
-import { DESIGNER_OPENAI_IMAGE_MODEL } from "@/lib/designer-image/llmConstants";
-import { isStudioImageModelId } from "@/config/constants";
+import { normalizeOpenAiImageModelId } from "@/lib/designer-image/openaiImageModelId";
+import {
+  generateNanoBanana2Image,
+  slotToNanoBanana2AspectRatio,
+} from "@/lib/nanobanana2";
+import { generateGeminiImageDataUrl } from "@/lib/geminiImage";
 
 /**
  * POST /api/generate/image
  *
- * OpenAI: uses the same prompt + model + size as visual designer (gpt-image-1, 1024×1024)
+ * OpenAI: uses the same prompt + model + size as visual designer (default GPT Image 1.5, 1024×1024)
  * when designerImage !== false. Optional: postSizeId, designerWhiteBg, designerThemeId.
  *
  * Body: {
@@ -27,6 +31,7 @@ import { isStudioImageModelId } from "@/config/constants";
  *   designerHideLogo?: boolean — matches designer “Hide logo”; image prompt omits logo placement line
  *   imageProvider?: "openai" | "gemini" — fallback when no Anthropic key (visual brief chat step)
  *   openaiImageModel?: string — allowlisted OpenAI `images.generate` model (designer + legacy paths)
+ *   provider: "openai" | "nanobanana" | "gemini" — gemini uses generateContent+IMAGE (ENKRYPT_GEMINI_CHAT_MODEL)
  * }
  */
 export async function POST(request) {
@@ -53,9 +58,7 @@ export async function POST(request) {
 
     const requestedImageModel =
       typeof openaiImageModelRaw === "string" ? openaiImageModelRaw.trim() : "";
-    const openaiImageModel = isStudioImageModelId(requestedImageModel)
-      ? requestedImageModel
-      : DESIGNER_OPENAI_IMAGE_MODEL;
+    const openaiImageModel = normalizeOpenAiImageModelId(requestedImageModel);
 
     if (provider === "openai") {
       const apiKey = request.headers.get("x-openai-key") || process.env.OPENAI_API_KEY;
@@ -196,6 +199,135 @@ export async function POST(request) {
       return NextResponse.json({ images, provider: "openai", pipeline: "legacy" });
     }
 
+    if (provider === "gemini") {
+      const geminiApiKey = (
+        request.headers.get("x-gemini-key") ||
+        process.env.GEMINI_API_KEY ||
+        process.env.GOOGLE_AI_API_KEY ||
+        ""
+      )
+        .replace(/[^\x20-\x7E]/g, "")
+        .trim();
+      if (!geminiApiKey) {
+        return NextResponse.json(
+          {
+            error:
+              "Gemini API key not configured. Add it in Settings (⚙) or set GEMINI_API_KEY / GOOGLE_AI_API_KEY in .env.local",
+          },
+          { status: 500 }
+        );
+      }
+
+      const openaiKeyBrief = (request.headers.get("x-openai-key") || process.env.OPENAI_API_KEY || "")
+        .replace(/[^\x20-\x7E]/g, "")
+        .trim();
+      const anthropicKeyBrief = (request.headers.get("x-anthropic-key") || process.env.ANTHROPIC_API_KEY || "")
+        .replace(/[^\x20-\x7E]/g, "")
+        .trim();
+      const visualBriefApiKey = (anthropicKeyBrief || openaiKeyBrief || geminiApiKey)
+        .replace(/[^\x20-\x7E]/g, "")
+        .trim();
+      const visualBriefProvider = anthropicKeyBrief
+        ? "claude"
+        : imageProvider === "gemini"
+          ? "gemini"
+          : openaiKeyBrief
+            ? "openai"
+            : "gemini";
+      const promptBuilderKey = openaiKeyBrief || geminiApiKey;
+
+      const requestOrigin = new URL(request.url).origin;
+      const studioBrandPayload = serializeStudioBrandForDesigner(brand || null, requestOrigin);
+
+      if (designerImage) {
+        const size = postSizeIdToCanvasSize(
+          postSizeId === "1080x1080-trns" ? "1080x1080" : postSizeId
+        );
+        const parsed =
+          extractedFromClient && typeof extractedFromClient === "object"
+            ? {
+                heading: String(extractedFromClient.heading || ""),
+                subheading: String(extractedFromClient.subheading || ""),
+                footer: String(extractedFromClient.footer || ""),
+              }
+            : extractGeneratedContentFromSummary(contentSummary || "");
+        const content = {
+          heading: parsed.heading || "Content",
+          subheading: parsed.subheading || parsed.heading || "",
+          footer: parsed.footer || parsed.subheading || parsed.heading || "",
+        };
+
+        const rawBrief = [
+          contentSummary || "",
+          channel ? `Channel: ${channel}` : "",
+          slot ? `Visual slot: ${slot}` : "",
+          brand?.company_name ? `Brand: ${brand.company_name}` : "",
+          brand?.visual_style?.image_style
+            ? `Image style preference: ${brand.visual_style.image_style}`
+            : "",
+        ]
+          .filter(Boolean)
+          .join("\n\n");
+
+        const images = [];
+        for (let i = 0; i < numVariants; i++) {
+          const imgPrompt = await buildDesignerOpenAiImagePrompt({
+            content,
+            rawContentForBrief: rawBrief,
+            themeId: designerThemeId,
+            size,
+            designerWhiteBg,
+            postSizeId,
+            headerModeDesigner: true,
+            apiKey: promptBuilderKey,
+            visualBriefApiKey,
+            visualBriefProvider,
+            omitContentTextInImage,
+            variationIdx: i,
+            layoutOverrides: { hideLogo: !!designerHideLogo },
+            studioBrandPayload,
+          });
+
+          const url = await generateGeminiImageDataUrl(geminiApiKey, imgPrompt);
+
+          images.push({
+            id: `img-${slot}-${i}`,
+            url,
+            revisedPrompt: imgPrompt,
+            designerMeta: {
+              postSizeId,
+              designerWhiteBg,
+              designerThemeId,
+              canvasSize: size,
+            },
+          });
+        }
+
+        return NextResponse.json({
+          images,
+          provider: "gemini",
+          pipeline: "designer",
+        });
+      }
+
+      const basePrompt = buildImagePrompt({ channel, slot, brand, contentSummary });
+      const legPrompt = brand?.visual_style?.image_style
+        ? `${basePrompt}\n\nVisual style preference: ${brand.visual_style.image_style}.`
+        : basePrompt;
+
+      const images = [];
+      for (let i = 0; i < numVariants; i++) {
+        const url = await generateGeminiImageDataUrl(geminiApiKey, legPrompt);
+        images.push({
+          id: `img-${slot}-${i}`,
+          url,
+          revisedPrompt: legPrompt,
+        });
+      }
+
+      return NextResponse.json({ images, provider: "gemini", pipeline: "legacy" });
+    }
+
     if (provider === "nanobanana") {
       const apiKey =
         request.headers.get("x-nanobanana-key") || process.env.NANOBANANA_API_KEY;
@@ -203,45 +335,33 @@ export async function POST(request) {
         return NextResponse.json(
           {
             error:
-              "Nano Banana API key not configured. Add it in Settings (⚙) or set NANOBANANA_API_KEY in .env.local",
+              "Nano Banana 2 API key not configured. Add it in Settings (⚙) or set NANOBANANA_API_KEY in .env.local (key from nanobananaapi.ai).",
           },
           { status: 500 }
         );
       }
 
-      const prompt = buildImagePrompt({ channel, slot, brand, contentSummary });
+      const basePrompt = buildImagePrompt({ channel, slot, brand, contentSummary });
+      const style = brand?.visual_style?.image_style;
+      const prompt = style ? `${basePrompt}\n\nVisual style preference: ${style}.` : basePrompt;
+      const aspectRatio = slotToNanoBanana2AspectRatio(slot);
 
-      const response = await fetch("https://api.nanobanana.ai/v1/generate", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${apiKey}`,
-        },
-        body: JSON.stringify({
+      const images = [];
+      for (let i = 0; i < numVariants; i++) {
+        const url = await generateNanoBanana2Image(apiKey, {
           prompt,
-          num_images: numVariants,
-          width: slot.includes("carousel") ? 1024 : 1792,
-          height: slot.includes("carousel") ? 1024 : 1024,
-          style: brand?.visual_style?.image_style || "minimal",
-        }),
-      });
-
-      if (!response.ok) {
-        const err = await response.text();
-        return NextResponse.json(
-          { error: `Nano Banana API error: ${err}` },
-          { status: response.status }
-        );
+          aspectRatio,
+          resolution: "2K",
+          outputFormat: "png",
+        });
+        images.push({
+          id: `img-${slot}-${i}`,
+          url,
+          revisedPrompt: prompt,
+        });
       }
 
-      const data = await response.json();
-      const images = (data.images || []).map((img, i) => ({
-        id: `img-${slot}-${i}`,
-        url: img.url,
-        revisedPrompt: prompt,
-      }));
-
-      return NextResponse.json({ images, provider: "nanobanana" });
+      return NextResponse.json({ images, provider: "nanobanana", pipeline: "nanobanana2" });
     }
 
     return NextResponse.json({ error: `Unknown provider: ${provider}` }, { status: 400 });

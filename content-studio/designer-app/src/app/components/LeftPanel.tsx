@@ -31,6 +31,17 @@ import {
   ENKRYPT_DESIGNER_SEMANTIC_COLORS as BRAND_COLORS,
   createEnkryptNoTemplateTheme,
 } from "@studio-brand";
+import { DEFAULT_TEXT_COLOR_SETTINGS } from "@/app/utils/textColorSettings";
+import { readOpenAiImageModelFromBrowserPrefs } from "../../../../lib/designer-image/openaiImageModelId.js";
+
+function dataUrlFromOpenAiImageRow(row: {
+  b64_json?: string;
+  url?: string;
+}): string {
+  if (row.b64_json) return `data:image/png;base64,${row.b64_json}`;
+  if (row.url) return row.url;
+  throw new Error("OpenAI returned no image data (expected b64_json or url)");
+}
 
 /* ── Types ── */
 interface GeneratedContent {
@@ -125,6 +136,8 @@ interface LeftPanelProps {
   registerPreviewToolbar?: (api: PreviewToolbarApi | null) => void;
   /** Content Studio iframe */
   isEmbed?: boolean;
+  /** Claude API key for visual-brief step; image still uses OpenAI/Gemini per `provider`. */
+  anthropicKeyForBrief?: string;
 }
 
 /* ── Template passwords ── */
@@ -895,7 +908,7 @@ function DraggableBlogCard({
 }
 
 /* ───────────────────────────────────────────── */
-export function LeftPanel({ onContentGenerated, onSettingsChange, onGenerateVisual, hasContent, provider, apiKeyRaw, headerMode, mode, setMode, settings: settingsFromProps, registerPreviewToolbar, isEmbed = false }: LeftPanelProps) {
+export function LeftPanel({ onContentGenerated, onSettingsChange, onGenerateVisual, hasContent, provider, apiKeyRaw, headerMode, mode, setMode, settings: settingsFromProps, registerPreviewToolbar, isEmbed = false, anthropicKeyForBrief = "" }: LeftPanelProps) {
   /* ── Shared state ── */
   /** Sanitize API key: strip non-ASCII / invisible Unicode chars that break fetch headers */
   const apiKey = apiKeyRaw.replace(/[^\x20-\x7E]/g, "").trim();
@@ -935,11 +948,12 @@ export function LeftPanel({ onContentGenerated, onSettingsChange, onGenerateVisu
     subheading: { yPct: 10 },
     footer: { yPct: 80 },
   });
-  const [textColorSettings, setTextColorSettings] = useState<TextColorSettings>({
-    heading: { baseColor: "#FFFFFF", useGradient: true, wordStyles: {} },
-    subheading: { baseColor: "#000000", useGradient: false, wordStyles: {} },
-    footer: { baseColor: "#FFFFFF", useGradient: true, wordStyles: {} },
-  });
+  const [textColorSettings, setTextColorSettings] = useState<TextColorSettings>(() => ({
+    ...DEFAULT_TEXT_COLOR_SETTINGS,
+    heading: { ...DEFAULT_TEXT_COLOR_SETTINGS.heading, wordStyles: {} },
+    subheading: { ...DEFAULT_TEXT_COLOR_SETTINGS.subheading, wordStyles: {} },
+    footer: { ...DEFAULT_TEXT_COLOR_SETTINGS.footer, wordStyles: {} },
+  }));
   const [selectedWord, setSelectedWord] = useState<{ field: "heading" | "subheading" | "footer"; index: number } | null>(null);
   const [selectedThemes, setSelectedThemes] = useState<string[]>(["none"]);
   const [variationCount, setVariationCount] = useState(1);
@@ -1097,23 +1111,43 @@ export function LeftPanel({ onContentGenerated, onSettingsChange, onGenerateVisu
   // Re-push settings when text field toggles change so preview updates immediately
   useEffect(() => { updateSettings({}); }, [useHeading, useSubheading, useFooter]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  /* Embed: sync local image/variation state once when injected visual arrives (toolbar keys off `variations`). */
+  /* Keep local text colors aligned with lifted settings (embed + RightPanel edits). */
+  const textColorsSyncKey = settingsFromProps?.textColorSettings
+    ? JSON.stringify(settingsFromProps.textColorSettings)
+    : "";
+  useEffect(() => {
+    if (!textColorsSyncKey) return;
+    try {
+      setTextColorSettings(JSON.parse(textColorsSyncKey) as TextColorSettings);
+    } catch {
+      /* ignore */
+    }
+  }, [textColorsSyncKey]);
+
+  /* Embed: sync local state once from lifted settings (visual + optional structure text). */
   useEffect(() => {
     if (!isEmbed || !settingsFromProps || embedHydratedRef.current) return;
     const pv = settingsFromProps.visualImage;
     const pvars = settingsFromProps.variations;
     const list =
       pvars && pvars.length > 0 ? [...pvars] : pv ? [pv] : [];
-    if (list.length === 0) return;
-    embedHydratedRef.current = true;
-    setVariations(list);
-    setOriginalVariations([...list]);
-    const av = Math.min(
-      Math.max(0, settingsFromProps.activeVariation ?? 0),
-      list.length - 1,
+    const c0 = settingsFromProps.content;
+    const hasInjectedText = !!(
+      c0 &&
+      (c0.heading || c0.subheading || c0.footer)
     );
-    setActiveVariation(av);
-    setVisualImage(list[av] ?? list[0]);
+    if (list.length === 0 && !hasInjectedText) return;
+    embedHydratedRef.current = true;
+    if (list.length > 0) {
+      setVariations(list);
+      setOriginalVariations([...list]);
+      const av = Math.min(
+        Math.max(0, settingsFromProps.activeVariation ?? 0),
+        list.length - 1,
+      );
+      setActiveVariation(av);
+      setVisualImage(list[av] ?? list[0]);
+    }
     if (settingsFromProps.size?.width && settingsFromProps.size?.height) {
       setSize({ width: settingsFromProps.size.width, height: settingsFromProps.size.height });
     }
@@ -1123,11 +1157,12 @@ export function LeftPanel({ onContentGenerated, onSettingsChange, onGenerateVisu
     if (settingsFromProps.selectedThemes?.length) {
       setSelectedThemes([...settingsFromProps.selectedThemes]);
     }
-    if (settingsFromProps.content) {
-      const c = settingsFromProps.content;
-      if (c.heading || c.subheading || c.footer) {
-        setGenerated(c);
-        setEditValues(c);
+    if (hasInjectedText && c0) {
+      setGenerated(c0);
+      setEditValues(c0);
+      if (!rawContent.trim()) {
+        const synth = [c0.heading, c0.subheading, c0.footer].filter(Boolean).join("\n");
+        if (synth) setRawContent(synth);
       }
     }
     if (settingsFromProps.logoPosition) {
@@ -1392,12 +1427,13 @@ export function LeftPanel({ onContentGenerated, onSettingsChange, onGenerateVisu
 
     try {
       if (provider === "openai") {
+        const openAiImgModel = readOpenAiImageModelFromBrowserPrefs();
         // Never send the template image — it causes the AI to copy template content.
         // Template style is fully described in the text prompt instead.
         // Only use /edits when user has a source image; otherwise use /generations.
         if (sourceB64) {
           const formData = new FormData();
-          formData.append("model", "gpt-image-1");
+          formData.append("model", openAiImgModel);
           formData.append("prompt", imgPrompt);
           formData.append("n", "1");
           formData.append("size", "1024x1024");
@@ -1421,8 +1457,7 @@ export function LeftPanel({ onContentGenerated, onSettingsChange, onGenerateVisu
           }
 
           const data = await response.json();
-          const b64 = data.data[0].b64_json;
-          return `data:image/png;base64,${b64}`;
+          return dataUrlFromOpenAiImageRow(data.data?.[0]);
         }
 
         const response = await fetch("https://api.openai.com/v1/images/generations", {
@@ -1432,7 +1467,7 @@ export function LeftPanel({ onContentGenerated, onSettingsChange, onGenerateVisu
             "Content-Type": "application/json",
           },
           body: JSON.stringify({
-            model: "gpt-image-1",
+            model: openAiImgModel,
             prompt: imgPrompt,
             n: 1,
             size: "1024x1024",
@@ -1447,8 +1482,7 @@ export function LeftPanel({ onContentGenerated, onSettingsChange, onGenerateVisu
         }
 
         const data = await response.json();
-        const b64 = data.data[0].b64_json;
-        return `data:image/png;base64,${b64}`;
+        return dataUrlFromOpenAiImageRow(data.data?.[0]);
       } else {
         const parts: any[] = [];
         // Don't send template image — style is described in the prompt text only
@@ -1511,8 +1545,11 @@ export function LeftPanel({ onContentGenerated, onSettingsChange, onGenerateVisu
     const accumulated: string[] = [];
 
     try {
-      // Build a content-aware visual brief from pasted content + heading/subheading/footer for better image prompting
-      const visualBrief = await buildVisualBrief(rawContent, content, apiKey, provider);
+      // Build a content-aware visual brief — use structured content as source when the
+      // textarea is empty (common in embed mode where Content Studio pre-populates content)
+      const effectiveRawContent = rawContent.trim()
+        || [content.heading, content.subheading, content.footer].filter(Boolean).join("\n");
+      const visualBrief = await buildVisualBrief(effectiveRawContent, content, apiKey, provider, anthropicKeyForBrief);
 
       let idx = 0;
       for (const tid of themesToUse) {
@@ -1573,13 +1610,14 @@ export function LeftPanel({ onContentGenerated, onSettingsChange, onGenerateVisu
       const editFullPrompt = `You are editing an EXISTING image. The attached image is the current design — do NOT regenerate it from scratch. Make ONLY the specific change described below while preserving everything else exactly as-is.\n\nEDIT INSTRUCTION: ${editPrompt.trim()}\n\nCRITICAL: Keep the existing layout, colors, icons, text, composition, and light background completely intact. Only apply the minimal change requested above. The result should look identical to the original except for the specific edit.`;
 
       if (provider === "openai") {
+        const openAiImgModel = readOpenAiImageModelFromBrowserPrefs();
         const byteStr = atob(b64Data);
         const ab = new Uint8Array(byteStr.length);
         for (let i = 0; i < byteStr.length; i++) ab[i] = byteStr.charCodeAt(i);
         const imgBlob = new Blob([ab], { type: "image/png" });
 
         const formData = new FormData();
-        formData.append("model", "gpt-image-1");
+        formData.append("model", openAiImgModel);
         formData.append("prompt", editFullPrompt);
         formData.append("image[]", imgBlob, "current-image.png");
         formData.append("n", "1");
@@ -1598,8 +1636,7 @@ export function LeftPanel({ onContentGenerated, onSettingsChange, onGenerateVisu
         }
 
         const data = await response.json();
-        const newB64 = data.data[0].b64_json;
-        const dataUrl = `data:image/png;base64,${newB64}`;
+        const dataUrl = dataUrlFromOpenAiImageRow(data.data?.[0]);
 
         const newVariations = [...variations];
         newVariations[activeVariation] = dataUrl;
@@ -1669,13 +1706,14 @@ export function LeftPanel({ onContentGenerated, onSettingsChange, onGenerateVisu
       const editFullPrompt = `You are editing an EXISTING image. The attached image is the current design — do NOT regenerate it from scratch. Make ONLY the specific change described below while preserving everything else exactly as-is.\n\nEDIT INSTRUCTION: ${blogEditPrompt.trim()}\n\nCRITICAL: Keep the existing layout, colors, icons, text, composition, and light background completely intact. Only apply the minimal change requested above. The result should look identical to the original except for the specific edit.`;
 
       if (provider === "openai") {
+        const openAiImgModel = readOpenAiImageModelFromBrowserPrefs();
         const byteStr = atob(b64Data);
         const ab = new Uint8Array(byteStr.length);
         for (let i = 0; i < byteStr.length; i++) ab[i] = byteStr.charCodeAt(i);
         const imgBlob = new Blob([ab], { type: "image/png" });
 
         const formData = new FormData();
-        formData.append("model", "gpt-image-1");
+        formData.append("model", openAiImgModel);
         formData.append("prompt", editFullPrompt);
         formData.append("image[]", imgBlob, "current-image.png");
         formData.append("n", "1");
@@ -1694,8 +1732,7 @@ export function LeftPanel({ onContentGenerated, onSettingsChange, onGenerateVisu
         }
 
         const data = await response.json();
-        const newB64 = data.data[0].b64_json;
-        const dataUrl = `data:image/png;base64,${newB64}`;
+        const dataUrl = dataUrlFromOpenAiImageRow(data.data?.[0]);
 
         const updated = [...blogSections];
         updated[activeBlogImage] = { ...sec, image: dataUrl };
@@ -1950,7 +1987,7 @@ Return ONLY a valid JSON array with 3 to 5 items — no markdown, no explanation
         };
         // Blog mode: prompt for this section only — use only this section's content so the image is content-aware and distinct
         const sectionRawContext = [sec.heading, sec.subheading, sec.footer].filter(Boolean).join(" ");
-        const sectionBrief = await buildVisualBrief(sectionRawContext, contentForSection, apiKey, provider);
+        const sectionBrief = await buildVisualBrief(sectionRawContext, contentForSection, apiKey, provider, anthropicKeyForBrief);
         const visualBrief = sectionBrief + " This image is for ONE section of a multi-section blog. Illustrate ONLY this section's topic; do not combine with other sections. The visual must clearly match this section's concept (e.g. if the section is about scanning, show scan-related visuals; if about permissions, show permission/shield visuals).";
         const imgUrl = await generateSingleVisual(contentForSection, sec.themeId, i, blogUploadedImage, true, visualBrief);
         updatedSections[i] = { ...updatedSections[i], image: imgUrl || undefined, status: imgUrl ? "done" : "error" };
@@ -1995,7 +2032,7 @@ Return ONLY a valid JSON array with 3 to 5 items — no markdown, no explanation
       const contentForSection: GeneratedContent = { heading: sec.heading, subheading: sec.subheading, footer: sec.footer };
       // Blog mode: prompt for this section only — content-aware so the image matches this section's topic
       const sectionRawContext = [sec.heading, sec.subheading, sec.footer].filter(Boolean).join(" ");
-      const sectionBrief = await buildVisualBrief(sectionRawContext, contentForSection, apiKey, provider);
+      const sectionBrief = await buildVisualBrief(sectionRawContext, contentForSection, apiKey, provider, anthropicKeyForBrief);
       const visualBrief = sectionBrief + " This image is for ONE section of a multi-section blog. Illustrate ONLY this section's topic; do not combine with other sections. The visual must clearly match this section's concept (e.g. if the section is about scanning, show scan-related visuals; if about permissions, show permission/shield visuals).";
       const imgUrl = await generateSingleVisual(contentForSection, sec.themeId, idx, blogUploadedImage, true, visualBrief);
       updatedSections[idx] = { ...updatedSections[idx], image: imgUrl || undefined, status: imgUrl ? "done" : "error" };

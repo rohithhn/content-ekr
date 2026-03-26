@@ -150,6 +150,12 @@ export function buildBrandVisualDirectiveForHtml(brand) {
 - **Typography:** "${hf}" (headings), "${bf}" (body) — load from Google Fonts if needed.
 - Do **not** default to Enkrypt orange #FF7404 / pink #FF3BA2 unless those exact values appear in the OVERRIDE lines above.
 
+## LOGO + LIGHT/DARK THEME (matches Brand Editor — do not invert)
+- \`logos.primary\` → **only** when \`data-theme="light"\` (or light header): dark-colored lockup on white/light surfaces.
+- \`logos.dark\` → **only** when \`data-theme="dark"\` (or dark header): light/white lockup on dark surfaces.
+- Theme-toggle script must swap **only** between the two exact URLs in **RUNTIME ASSETS** (same pairing as this table). Never use one asset for both themes.
+- **Landings must support both modes:** light UI and dark UI must both be fully usable (readable contrast, correct surfaces) — not dark-only.
+
 ## IDENTITY (non-negotiable)
 - The **only** correct product/company name for visible UI (nav, logo text, \`<title>\`, meta, hero, footer, \`alt\` beside the mark) is **"${label.replace(/"/g, '\\"')}"** (and phrasing from SOURCE when it names this brand).
 - Do **not** print **Enkrypt AI**, **Enkrypt**, or any other company name unless it appears verbatim in SOURCE as the actual brand being built.

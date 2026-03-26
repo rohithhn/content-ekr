@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from "react";
 import { Eye, EyeOff, Check, Sun, Moon, Sparkles, BookOpen, PenLine, Newspaper, LayoutTemplate } from "lucide-react";
 import type { AppMode } from "@/app/types/appMode";
 import {
+  ENKRYPT_ANTHROPIC_CHAT_MODEL,
   ENKRYPT_GEMINI_CHAT_MODEL,
   ENKRYPT_OPENAI_CHAT_MODEL,
   ENKRYPT_OPENAI_FAST_MODEL,
@@ -15,6 +16,9 @@ interface HeaderProps {
   setProvider: (p: "openai" | "gemini") => void;
   apiKeyRaw: string;
   setApiKeyRaw: (k: string) => void;
+  /** Optional: Claude writes the structured visual brief; OpenAI/Gemini still render the image */
+  anthropicKeyRaw?: string;
+  setAnthropicKeyRaw?: (k: string) => void;
   mode: AppMode;
   setMode: (m: AppMode) => void;
   /** Content Studio iframe — only designer tools, no General/Blog/Writer/Researcher */
@@ -29,9 +33,20 @@ const ALL_MODE_TABS = [
   { id: "designer" as const, label: "Designer", Icon: LayoutTemplate },
 ] as const;
 
-export function Header({ provider, setProvider, apiKeyRaw, setApiKeyRaw, mode, setMode, embed = false }: HeaderProps) {
+export function Header({
+  provider,
+  setProvider,
+  apiKeyRaw,
+  setApiKeyRaw,
+  anthropicKeyRaw = "",
+  setAnthropicKeyRaw,
+  mode,
+  setMode,
+  embed = false,
+}: HeaderProps) {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [showKey, setShowKey] = useState(false);
+  const [showAnthropicKey, setShowAnthropicKey] = useState(false);
   const [saved, setSaved] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
 
@@ -72,6 +87,9 @@ export function Header({ provider, setProvider, apiKeyRaw, setApiKeyRaw, mode, s
     try {
       localStorage.setItem("enkrypt-api-provider", provider);
       localStorage.setItem("enkrypt-api-key", apiKeyRaw);
+      if (setAnthropicKeyRaw) {
+        localStorage.setItem("enkrypt-anthropic-key", anthropicKeyRaw);
+      }
     } catch {}
     setSaved(true);
     setTimeout(() => setSaved(false), 1500);
@@ -265,7 +283,10 @@ export function Header({ provider, setProvider, apiKeyRaw, setApiKeyRaw, mode, s
                     <span className="text-foreground font-mono">{ENKRYPT_OPENAI_FAST_MODEL}</span>.
                     Gemini uses{" "}
                     <span className="text-foreground font-mono">{ENKRYPT_GEMINI_CHAT_MODEL}</span>.
-                    The header pill shows the chat model for your selected provider.
+                    The header pill shows the chat model for your selected provider. Optional Claude (
+                    <span className="text-foreground font-mono">{ENKRYPT_ANTHROPIC_CHAT_MODEL}</span>
+                    ) below runs the <strong className="text-foreground">visual brief</strong> step
+                    (visual-designer-content-flow); the image API still uses OpenAI or Gemini.
                   </div>
 
                   <div>
@@ -297,6 +318,47 @@ export function Header({ provider, setProvider, apiKeyRaw, setApiKeyRaw, mode, s
                     </div>
                   </div>
 
+                  {setAnthropicKeyRaw ? (
+                    <div>
+                      <label
+                        className="text-card-foreground block mb-1.5"
+                        style={{ fontSize: "var(--text-sm)", fontWeight: "var(--font-weight-medium)" as any }}
+                      >
+                        Anthropic API key (optional — visual brief only)
+                      </label>
+                      <p
+                        className="text-muted-foreground mb-2"
+                        style={{ fontSize: "var(--text-2xs)", lineHeight: 1.45 }}
+                      >
+                        When set, Claude builds the 7-field VISUAL BRIEF merged into the image prompt.
+                        Image pixels still use your OpenAI or Gemini key above.
+                      </p>
+                      <div className="relative">
+                        <input
+                          type={showAnthropicKey ? "text" : "password"}
+                          placeholder="sk-ant-..."
+                          value={anthropicKeyRaw}
+                          onChange={(e) => setAnthropicKeyRaw(e.target.value)}
+                          className="w-full px-3 py-2 pr-10 rounded-[var(--radius)] border border-border bg-input-background text-foreground"
+                          style={{ fontSize: "var(--text-sm)", outline: "none" }}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowAnthropicKey(!showAnthropicKey)}
+                          className="absolute right-2 top-1/2 -translate-y-1/2 w-6 h-6 flex items-center justify-center cursor-pointer rounded-[var(--radius-utility)] hover:bg-muted transition-colors"
+                          style={{ border: "none", background: "transparent" }}
+                          title={showAnthropicKey ? "Hide" : "Show"}
+                        >
+                          {showAnthropicKey ? (
+                            <EyeOff className="w-3.5 h-3.5 text-muted-foreground" />
+                          ) : (
+                            <Eye className="w-3.5 h-3.5 text-muted-foreground" />
+                          )}
+                        </button>
+                      </div>
+                    </div>
+                  ) : null}
+
                   <button
                     onClick={handleSave}
                     className="w-full py-2 px-3 rounded-[var(--radius-button)] bg-primary text-primary-foreground cursor-pointer transition-all hover:opacity-90 flex items-center justify-center gap-1.5"
@@ -308,7 +370,7 @@ export function Header({ provider, setProvider, apiKeyRaw, setApiKeyRaw, mode, s
                         Saved!
                       </>
                     ) : (
-                      "Save API Key"
+                      "Save keys"
                     )}
                   </button>
 

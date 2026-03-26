@@ -4,8 +4,8 @@
  * generateImageInstruction()  — v1: fast OpenAI chat model reads content and writes a
  *                               concise creative image instruction automatically.
  *
- * generateStudioImage()       — calls gpt-image-1 / Gemini Imagen with a
- *                               slot-aware prompt. Returns a base64 data URL.
+ * generateStudioImage()       — calls OpenAI Images (GPT Image, from Content Studio model prefs) / Gemini with a
+ *                               slot-aware prompt. Returns a data URL or image URL.
  *
  * Spatial slots (match General tab exactly):
  *   Heading:    top 7–17%   of canvas
@@ -19,6 +19,7 @@ import {
   ENKRYPT_OPENAI_FAST_MODEL,
   openAiChatCompletionsExtras,
 } from "./llmText";
+import { readOpenAiImageModelFromBrowserPrefs } from "../../../../lib/designer-image/openaiImageModelId.js";
 
 export interface StudioGeneratorOptions {
   instruction: string;
@@ -167,22 +168,25 @@ export async function generateStudioImage(
   const apiKey = opts.apiKey.replace(/[^\x20-\x7E]/g, "").trim();
 
   if (opts.provider === "openai") {
+    const model = readOpenAiImageModelFromBrowserPrefs();
     const res = await fetch("https://api.openai.com/v1/images/generations", {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
       body: JSON.stringify({
-        model: "gpt-image-1",
+        model,
         prompt,
         n: 1,
         size: "1024x1024",
         quality: "high",
+        output_format: "png",
       }),
     });
     if (!res.ok) throw new Error(`OpenAI image generation failed: ${await res.text()}`);
     const data = await res.json();
-    const b64 = data?.data?.[0]?.b64_json;
-    if (!b64) throw new Error("No image data returned from OpenAI");
-    return `data:image/png;base64,${b64}`;
+    const row = data?.data?.[0];
+    if (row?.b64_json) return `data:image/png;base64,${row.b64_json}`;
+    if (row?.url) return row.url;
+    throw new Error("No image data returned from OpenAI");
   }
 
   if (opts.provider === "gemini") {

@@ -10,6 +10,7 @@ services:
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - NANOBANANA_API_KEY=${NANOBANANA_API_KEY}
+      - KIE_AI_API_KEY=${KIE_AI_API_KEY}
       - KLING_API_KEY=${KLING_API_KEY}
     restart: unless-stopped
     healthcheck:

@@ -88,3 +88,41 @@ ${skill}
 
 ${tail}`;
 }
+
+/**
+ * Short Video channel: append logo URLs + brand visual directive so Claude writes a Kling-aligned prompt.
+ * @param {string} baseSystemPrompt
+ * @param {string} channel
+ * @param {{ brand?: object|null, origin?: string }} [opts]
+ */
+export function composeSystemPromptWithShortVideoSkill(baseSystemPrompt, channel, opts = {}) {
+  if (channel !== "short-video") return baseSystemPrompt;
+
+  const origin = typeof opts.origin === "string" ? opts.origin : "";
+  const { company, lightLogo, darkLogo } = resolveLogosForHtmlGeneration(opts.brand ?? null, origin);
+  const visualDirective = buildBrandVisualDirectiveForHtml(opts.brand ?? null);
+
+  const runtimeLogos = `
+---
+## RUNTIME ASSETS — BRAND LOGOS (SHORT VIDEO / KLING)
+
+**Brand name:** ${company}
+
+Describe on-screen branding consistently with these marks (the video API also receives brand colors and logo notes):
+
+- **Dark wordmark on LIGHT backgrounds** (bright scenes, daylight, white end cards): appearance should match \`${lightLogo}\` (conceptually — this is the light-surface lockup).
+- **Light/white wordmark on DARK backgrounds** (cinematic dark, night, gradient): appearance should match \`${darkLogo}\` (conceptually — the dark-surface lockup).
+
+In your **text-to-video prompt**, specify **where** the logo appears (e.g. top-left corner bug, end-card center), **scale**, and **contrast** so it stays readable. Do not invent unrelated brands or generic “random logo” language — use **${company}** and the BRAND GUIDELINES in this system prompt.
+`.trim();
+
+  const tail = [runtimeLogos, visualDirective].filter(Boolean).join("\n\n");
+
+  return `${baseSystemPrompt}
+
+---
+## KLING / TEXT-TO-VIDEO
+
+The user will send your output to a **text-to-video** generator with **brand colors, logo description, and placement** injected by the app. Your prompt must **complement** that (same company name, palette mood, logo beats) and stay **one continuous cinematic brief** — no JSON, no markdown fences.
+${tail ? `\n\n${tail}` : ""}`;
+}

@@ -3,10 +3,43 @@
  * Brand object shape matches Workspace `BrandEditor` / `defaultBrands`.
  */
 
-import { ENKRYPT_GRADIENT_END, ENKRYPT_GRADIENT_START } from "./enkrypt-defaults.js";
+import {
+  ENKRYPT_GRADIENT_END,
+  ENKRYPT_GRADIENT_START,
+  ENKRYPT_LOGO_FOR_DARK_BACKGROUND,
+  ENKRYPT_LOGO_FOR_LIGHT_BACKGROUND,
+  isEnkryptStudioBrand,
+} from "./enkrypt-defaults.js";
 import { resolveLogosForHtmlGeneration, brandDisplayName } from "./brandLogos.js";
 
 export const CE_DESIGNER_EMBED_BRAND_KEY = "ce_designer_embed_brand";
+
+/** Session keys written by `primeDesignerEmbed` (visual, layout, structure text). Cleared when the designer overlay closes. */
+const CE_DESIGNER_EMBED_VISUAL_KEY = "ce_designer_embed_visual";
+const CE_DESIGNER_EMBED_CONTENT_KEY = "ce_designer_embed_content";
+const CE_DESIGNER_EMBED_POST_SIZE_KEY = "ce_designer_embed_post_size_id";
+const CE_DESIGNER_EMBED_WHITE_BG_KEY = "ce_designer_embed_white_bg";
+const CE_DESIGNER_EMBED_THEME_KEY = "ce_designer_embed_theme_id";
+const CE_DESIGNER_EMBED_HIDE_LOGO_KEY = "ce_designer_embed_hide_logo";
+
+/**
+ * Remove embed payload from sessionStorage. Call when closing the Content Studio designer overlay
+ * so the next open gets a fresh `primeDesignerEmbed`. (Reading the iframe bootstrap must NOT remove
+ * these keys — React Strict Mode runs the effect twice and would drop visual/content on the 2nd pass.)
+ */
+export function clearDesignerEmbedPayloadSession() {
+  try {
+    if (typeof sessionStorage === "undefined") return;
+    sessionStorage.removeItem(CE_DESIGNER_EMBED_VISUAL_KEY);
+    sessionStorage.removeItem(CE_DESIGNER_EMBED_CONTENT_KEY);
+    sessionStorage.removeItem(CE_DESIGNER_EMBED_POST_SIZE_KEY);
+    sessionStorage.removeItem(CE_DESIGNER_EMBED_WHITE_BG_KEY);
+    sessionStorage.removeItem(CE_DESIGNER_EMBED_THEME_KEY);
+    sessionStorage.removeItem(CE_DESIGNER_EMBED_HIDE_LOGO_KEY);
+  } catch {
+    /* ignore */
+  }
+}
 
 /** Default image-prompt color block when no studio brand is injected (hex from enkrypt-defaults). */
 export const DEFAULT_DESIGNER_BRAND_COLOR_RULES = `\nBRAND COLOR GUIDANCE (follow strictly):\n- Primary accents: brand gradient orange ${ENKRYPT_GRADIENT_START} → pink ${ENKRYPT_GRADIENT_END} for icons, highlights, and decorative elements.\n- RED COLOR — this is a targeted rule, not a generic guideline: The CONTENT & VISUAL DIRECTION section below contains a VISUAL BRIEF with a ⚑ RED COLOR INSTRUCTION and a RED DECISION field. Read those fields now. If RED DECISION says ACTIVE, apply red #D92D20 to ONLY the exact element(s) named — do not use red anywhere else. If RED DECISION says INACTIVE, do NOT use red anywhere in this image — not as a border, frame, accent, glow, or any form of emphasis. This rule overrides any default behavior.\n- Extended accents: electric teal #06B6D4 or violet #7C3AED may be used as secondary accents when specified in the brief's PALETTE field.\n- Success/protected/secure: green #16B364 only for explicitly positive/secure/approved states.\n- Backgrounds: follow the PALETTE field in the brief. Dark backgrounds (#0A0F1E, #0D0F14) are valid and preferred for security/threat content. On dark backgrounds, use cool white #F0F4FF for labels and annotations.`;
@@ -32,11 +65,28 @@ export function serializeStudioBrandForDesigner(brand, origin) {
   const resolved = resolveLogosForHtmlGeneration(brand, base);
   const primaryUploaded = abs(logos.primary);
   const darkUploaded = abs(logos.dark);
+  let primaryLogo = primaryUploaded || resolved.lightLogo;
+  let darkLogo = darkUploaded || resolved.darkLogo;
+  /** SVG initials placeholder from `buildBrandPlaceholderLogoDataUri` — not a real lockup file */
+  const isSvgPlaceholder = (u) =>
+    typeof u === "string" && u.startsWith("data:image/svg+xml");
+  if (isEnkryptStudioBrand(brand)) {
+    if (!primaryUploaded && isSvgPlaceholder(primaryLogo)) {
+      primaryLogo =
+        abs(ENKRYPT_LOGO_FOR_LIGHT_BACKGROUND) ||
+        (base ? `${base}${ENKRYPT_LOGO_FOR_LIGHT_BACKGROUND}` : ENKRYPT_LOGO_FOR_LIGHT_BACKGROUND);
+    }
+    if (!darkUploaded && isSvgPlaceholder(darkLogo)) {
+      darkLogo =
+        abs(ENKRYPT_LOGO_FOR_DARK_BACKGROUND) ||
+        (base ? `${base}${ENKRYPT_LOGO_FOR_DARK_BACKGROUND}` : ENKRYPT_LOGO_FOR_DARK_BACKGROUND);
+    }
+  }
   return {
     logoPlacement: brand.logo_placement || "top-left",
     logos: {
-      primary: primaryUploaded || resolved.lightLogo,
-      dark: darkUploaded || resolved.darkLogo,
+      primary: primaryLogo,
+      dark: darkLogo,
     },
     colors: brand.colors && typeof brand.colors === "object" ? { ...brand.colors } : null,
     gradients: Array.isArray(brand.gradients) ? JSON.parse(JSON.stringify(brand.gradients)) : null,
@@ -80,6 +130,39 @@ export function clearStudioBrandSession() {
   try {
     if (typeof sessionStorage === "undefined") return;
     sessionStorage.removeItem(CE_DESIGNER_EMBED_BRAND_KEY);
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Content Studio → designer iframe: Claude key for visual-brief step (image prompt), optional. */
+export const CE_DESIGNER_EMBED_ANTHROPIC_KEY = "ce_designer_embed_anthropic_key";
+
+export function writeDesignerAnthropicToSession(key) {
+  try {
+    if (typeof sessionStorage === "undefined") return;
+    const t = key != null && String(key).trim() ? String(key).trim() : "";
+    if (!t) sessionStorage.removeItem(CE_DESIGNER_EMBED_ANTHROPIC_KEY);
+    else sessionStorage.setItem(CE_DESIGNER_EMBED_ANTHROPIC_KEY, t);
+  } catch {
+    /* ignore */
+  }
+}
+
+export function peekDesignerAnthropicSession() {
+  try {
+    if (typeof sessionStorage === "undefined") return null;
+    const s = sessionStorage.getItem(CE_DESIGNER_EMBED_ANTHROPIC_KEY);
+    return s && String(s).trim() ? String(s).trim() : null;
+  } catch {
+    return null;
+  }
+}
+
+export function clearDesignerAnthropicSession() {
+  try {
+    if (typeof sessionStorage === "undefined") return;
+    sessionStorage.removeItem(CE_DESIGNER_EMBED_ANTHROPIC_KEY);
   } catch {
     /* ignore */
   }

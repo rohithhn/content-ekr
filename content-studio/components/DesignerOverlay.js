@@ -4,6 +4,9 @@ import { useEffect, useRef, useState } from "react";
 import {
   writeStudioBrandToSession,
   clearStudioBrandSession,
+  writeDesignerAnthropicToSession,
+  clearDesignerAnthropicSession,
+  clearDesignerEmbedPayloadSession,
 } from "@/lib/brand/studioBrandBridge";
 
 const DESIGNER_INDEX = "/designer/index.html";
@@ -17,8 +20,9 @@ export const CE_DESIGNER_EMBED_VISUAL_MSG = "ce-designer-embed-visual";
  * @param {{ heading?: string, subheading?: string, footer?: string }|null} designerContent — same JSON step as designer LeftPanel
  * @param {{ postSizeId?: string, designerWhiteBg?: boolean, themeId?: string, hideLogo?: boolean }|null} [layout] — matches CenterPanel / structure + image APIs
  * @param {object|null} [brandFromStudio] — active brand from Brand Editor (colors, logos, placement); passed to designer iframe
+ * @param {string|null|undefined} [anthropicKeyForBrief] — Claude API key for visual-brief step (merged with designer prompt); OpenAI/Gemini still generate pixels
  */
-export function primeDesignerEmbed(imageUrl, designerContent, layout, brandFromStudio = null) {
+export function primeDesignerEmbed(imageUrl, designerContent, layout, brandFromStudio = null, anthropicKeyForBrief = null) {
   try {
     if (imageUrl) sessionStorage.setItem("ce_designer_embed_visual", imageUrl);
     else sessionStorage.removeItem("ce_designer_embed_visual");
@@ -58,6 +62,7 @@ export function primeDesignerEmbed(imageUrl, designerContent, layout, brandFromS
       brandFromStudio,
       typeof window !== "undefined" ? window.location.origin : ""
     );
+    writeDesignerAnthropicToSession(anthropicKeyForBrief);
   } catch {
     /* ignore */
   }
@@ -81,7 +86,9 @@ export default function DesignerOverlay({
 
   useEffect(() => {
     if (wasOpenRef.current && !open) {
+      clearDesignerEmbedPayloadSession();
       clearStudioBrandSession();
+      clearDesignerAnthropicSession();
     }
     wasOpenRef.current = open;
   }, [open]);

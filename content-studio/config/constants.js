@@ -57,6 +57,14 @@ export const CHANNELS = [
     slots: [],
     description: "1280×720 auto-play HTML scenes for screen recording — single file, no frameworks",
   },
+  {
+    id: "short-video",
+    label: "Short Video",
+    color: "#FF6B6B",
+    icon: "▮",
+    slots: [],
+    description: "Claude writes a Kling-ready prompt from your brief; brand + logo context go to the video API",
+  },
 ];
 
 /** LinkedIn multi-slide visuals (carousel-1 … carousel-3). */
@@ -184,6 +192,17 @@ export const TEMPLATES = [
     placeholder: "What story should the video tell? Product name, audience, key proof points, desired CTA, and any must-show scenes...",
   },
   {
+    id: "short-video-kling",
+    name: "Short Video (Kling)",
+    category: "Video",
+    channels: ["short-video"],
+    lucide: "Camera",
+    description: "AI writes a cinematic text-to-video prompt; send it to Kling with your brand colors and logo guidance.",
+    defaultTone: "Bold",
+    defaultMode: "text",
+    placeholder: "What should the short clip communicate? Hook, key message, audience, CTA, mood (e.g. urgent, premium, playful), and any must-show visuals...",
+  },
+  {
     id: "event-takeaways",
     name: "Event Takeaways",
     category: "Personal Brand",
@@ -235,8 +254,18 @@ export const INPUT_MODES = [
 export const AI_MODELS = [
   { id: "anthropic", name: "Claude Opus 4.6", provider: "Anthropic", type: "text", color: "#D4A574", envKey: "ANTHROPIC_API_KEY", keyField: "anthropic_key", headerName: "x-anthropic-key" },
   { id: "openai", name: "GPT-5.4", provider: "OpenAI", type: "image", color: "#74AA9C", envKey: "OPENAI_API_KEY", keyField: "openai_key", headerName: "x-openai-key" },
-  { id: "nanobanana", name: "Nano Banana", provider: "Nano Banana", type: "image", color: "#FFD93D", envKey: "NANOBANANA_API_KEY", keyField: "nanobanana_key", headerName: "x-nanobanana-key" },
-  { id: "kling", name: "Kling 2.0", provider: "Kuaishou", type: "video", color: "#FF6B6B", envKey: "KLING_API_KEY", keyField: "kling_key", headerName: "x-kling-key" },
+  {
+    id: "gemini",
+    name: "Gemini (Google AI)",
+    provider: "Google",
+    type: "image",
+    color: "#4285F4",
+    envKey: "GEMINI_API_KEY",
+    keyField: "gemini_key",
+    headerName: "x-gemini-key",
+  },
+  { id: "nanobanana", name: "Nano Banana 2", provider: "NanoBanana API", type: "image", color: "#FFD93D", envKey: "NANOBANANA_API_KEY", keyField: "nanobanana_key", headerName: "x-nanobanana-key" },
+  { id: "kling", name: "Kling (Kie AI)", provider: "Kie AI", type: "video", color: "#FF6B6B", envKey: "KIE_AI_API_KEY", keyField: "kling_key", headerName: "x-kling-key" },
 ];
 
 /** Header “Models” menu — actual API model ids passed to `/api/generate/text`. */
@@ -250,19 +279,43 @@ export const DEFAULT_STUDIO_TEXT_MODEL = "claude-opus-4-6";
 
 /** OpenAI image generation (`images.generate` model param) for designer + legacy pipelines. */
 export const STUDIO_IMAGE_MODEL_OPTIONS = [
+  { id: "gpt-image-1.5", label: "GPT Image 1.5 (latest)", short: "Img 1.5" },
+  {
+    id: "gpt-image-1.5-2025-12-16",
+    label: "GPT Image 1.5 (pinned 2025-12-16)",
+    short: "1.5 pin",
+  },
   { id: "gpt-image-1", label: "GPT Image 1", short: "Img 1" },
-  { id: "gpt-image-1.5", label: "GPT Image 1.5", short: "Img 1.5" },
 ];
 
-export const DEFAULT_STUDIO_IMAGE_MODEL = "gpt-image-1";
+export const DEFAULT_STUDIO_IMAGE_MODEL = "gpt-image-1.5";
 
-/** Forwarded to `/api/generate/video` (Kling or future providers). */
+/** Studio header: which backend handles `/api/generate/image` (Gemini only if key is configured). */
+export const STUDIO_IMAGE_PROVIDER_OPENAI = "openai";
+export const STUDIO_IMAGE_PROVIDER_GEMINI = "gemini";
+
+export const DEFAULT_STUDIO_IMAGE_PROVIDER = STUDIO_IMAGE_PROVIDER_OPENAI;
+
+export function isStudioImageProviderId(id) {
+  return id === STUDIO_IMAGE_PROVIDER_OPENAI || id === STUDIO_IMAGE_PROVIDER_GEMINI;
+}
+
+/**
+ * Kie AI `POST /api/v1/jobs/createTask` model names (see https://docs.kie.ai ).
+ * Legacy ids `kling-v2` / `kling-v1-6` are remapped in normalizeStudioVideoModel.
+ */
 export const STUDIO_VIDEO_MODEL_OPTIONS = [
-  { id: "kling-v2", label: "Kling 2.0", short: "Kling 2" },
-  { id: "kling-v1-6", label: "Kling 1.6", short: "Kling 1.6" },
+  { id: "kling/v2-1-master-text-to-video", label: "Kling V2.1 Master (Kie)", short: "V2.1" },
+  { id: "kling-2.6/text-to-video", label: "Kling 2.6 (Kie)", short: "2.6" },
 ];
 
-export const DEFAULT_STUDIO_VIDEO_MODEL = "kling-v2";
+export const DEFAULT_STUDIO_VIDEO_MODEL = "kling/v2-1-master-text-to-video";
+
+/** Maps saved UI / legacy ids → Kie `model` field */
+export const STUDIO_VIDEO_MODEL_LEGACY = {
+  "kling-v2": "kling/v2-1-master-text-to-video",
+  "kling-v1-6": "kling-2.6/text-to-video",
+};
 
 export function isStudioTextModelId(id) {
   if (!id || typeof id !== "string") return false;
@@ -281,7 +334,7 @@ export function isStudioVideoModelId(id) {
 
 const CE_STUDIO_MODELS_KEY = "ce_studio_models_v1";
 
-/** @returns {{ textModel: string, imageModel: string, videoModel: string }} */
+/** @returns {{ textModel: string, imageModel: string, videoModel: string, imageProvider?: string }} */
 export function loadStudioModelPrefs() {
   try {
     const s = typeof localStorage !== "undefined" ? localStorage.getItem(CE_STUDIO_MODELS_KEY) : null;
@@ -291,6 +344,7 @@ export function loadStudioModelPrefs() {
       textModel: typeof o.textModel === "string" ? o.textModel : null,
       imageModel: typeof o.imageModel === "string" ? o.imageModel : null,
       videoModel: typeof o.videoModel === "string" ? o.videoModel : null,
+      imageProvider: typeof o.imageProvider === "string" ? o.imageProvider : null,
     };
   } catch {
     return null;
@@ -315,5 +369,7 @@ export function normalizeStudioImageModel(id) {
 }
 
 export function normalizeStudioVideoModel(id) {
-  return isStudioVideoModelId(id) ? id : DEFAULT_STUDIO_VIDEO_MODEL;
+  const raw = typeof id === "string" ? id.trim() : "";
+  const resolved = STUDIO_VIDEO_MODEL_LEGACY[raw] || raw;
+  return isStudioVideoModelId(resolved) ? resolved : DEFAULT_STUDIO_VIDEO_MODEL;
 }

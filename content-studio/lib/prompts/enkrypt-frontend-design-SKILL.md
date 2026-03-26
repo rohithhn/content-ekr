@@ -40,36 +40,38 @@ Direction: Left → Right (horizontal) by default.
 
 ## LOGO USAGE — LIGHT & DARK MODE
 
-Enkrypt AI has **two logo variants**. Always ask the user to provide both, or reference them if already uploaded:
+**Content Studio / API landing pages:** Ignore placeholder filenames in this section if they conflict — use the **two exact URLs** in the system prompt’s **RUNTIME ASSETS** table only. The table maps Brand Editor **`logos.primary`** (light theme) and **`logos.dark`** (dark theme).
 
-| Mode        | Logo         | Use When                          |
-|-------------|--------------|-----------------------------------|
-| Light Mode  | Dark logo    | White / light neutral backgrounds |
-| Dark Mode   | Light/white logo | Dark backgrounds (#0D0D0D, #111, etc.) |
+| Page theme (`data-theme`) | Brand Editor field | Lockup (contrast rule) |
+|---------------------------|-------------------|-------------------------|
+| `light` | `logos.primary` | **Dark-colored** wordmark on **white / light** header & surfaces |
+| `dark` | `logos.dark` | **Light / white** wordmark on **dark** header & surfaces |
 
-### Implementation Pattern:
+### Implementation pattern (semantic variable names — paste RUNTIME URLs)
+
 ```css
-/* Always use CSS variables so logos swap with theme */
---logo-src: url('/logo-dark.svg');   /* light mode default */
-
-[data-theme="dark"] {
-  --logo-src: url('/logo-light.svg');
-}
+/* light theme surface → primary lockup; dark theme → dark-field lockup */
+:root[data-theme="light"] #logo { content: var(--logo-for-light-theme); }
+:root[data-theme="dark"] #logo { content: var(--logo-for-dark-theme); }
 ```
 
 ```html
-<!-- In HTML artifacts, use class-based or data-theme switching -->
-<img id="logo" src="logo-dark.svg" alt="Enkrypt AI" />
-
+<img id="logo" src="" alt="Brand" />
 <script>
+  /* Paste exact URLs from RUNTIME ASSETS — first = light theme, second = dark theme */
+  const logoUrlWhenThemeIsLight = 'PASTE_LOGOS_PRIMARY_URL';
+  const logoUrlWhenThemeIsDark = 'PASTE_LOGOS_DARK_URL';
   const logo = document.getElementById('logo');
-  const applyTheme = (dark) => {
-    logo.src = dark ? 'logo-light.svg' : 'logo-dark.svg';
+  const applyTheme = (isDark) => {
+    document.documentElement.dataset.theme = isDark ? 'dark' : 'light';
+    if (logo) logo.src = isDark ? logoUrlWhenThemeIsDark : logoUrlWhenThemeIsLight;
   };
 </script>
 ```
 
-**If only one logo is provided**, infer the correct usage and note to the user which variant is missing.
+**Do not** name files `logo-light.svg` / `logo-dark.svg` unless those names match the contrast rule above (easy to invert by mistake).
+
+**If only one URL exists** in Brand Editor, keep contrast rules and note the missing variant.
 
 ---
 
@@ -318,7 +320,9 @@ Gradient bg (#FF7404 → #FF3BA2):
 <script>
   const root = document.documentElement;
   const logo = document.getElementById('logo');
-  
+  const logoUrlWhenThemeIsLight = 'PASTE_FROM_RUNTIME_LOGOS_PRIMARY';
+  const logoUrlWhenThemeIsDark = 'PASTE_FROM_RUNTIME_LOGOS_DARK';
+
   const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
   let isDark = localStorage.getItem('enkrypt-theme') 
     ? localStorage.getItem('enkrypt-theme') === 'dark' 
@@ -326,7 +330,8 @@ Gradient bg (#FF7404 → #FF3BA2):
 
   const applyTheme = () => {
     root.setAttribute('data-theme', isDark ? 'dark' : 'light');
-    if (logo) logo.src = isDark ? 'logo-light.svg' : 'logo-dark.svg';
+    /* isDark → logos.dark URL (light glyph). !isDark → logos.primary URL (dark glyph). Use RUNTIME ASSETS URLs. */
+    if (logo) logo.src = isDark ? logoUrlWhenThemeIsDark : logoUrlWhenThemeIsLight;
     localStorage.setItem('enkrypt-theme', isDark ? 'dark' : 'light');
   };
 

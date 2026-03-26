@@ -53,23 +53,37 @@ export function buildLandingSystemPromptFromSkill({ brand = null, origin = "", b
   const brandBlock = (brandContextText || "").trim();
   const visualDirective = buildBrandVisualDirectiveForHtml(brand);
 
+  const escAttr = (s) => String(s || "").replace(/"/g, '\\"');
+
   const runtime = `
 ---
-## RUNTIME ASSETS — USE THESE EXACT LOGO URLs
+## RUNTIME ASSETS — LOGO URLs (AUTHORITATIVE — OVERRIDES SKILL EXAMPLES)
 
-**Brand name (title / alt text):** ${company}
+**Brand name (nav, \`<title>\`, logo \`alt\`):** ${company}
 
-**Dark wordmark on LIGHT backgrounds** (white/light sections, \`data-theme="light"\`):
-- \`${lightLogo}\`
-- Use for \`<img id="logo" … src="…" alt="${company.replace(/"/g, '\\"')}" />\` when the header/surface is light.
+**Light mode and dark mode are both required** on this landing: implement the **enkrypt-frontend-design** skill’s full \`:root\` / \`[data-theme="light"]\` and \`[data-theme="dark"]\` color tokens so the **entire page** (backgrounds, text, cards, borders) switches correctly — not a dark-only page.
 
-**Light/white wordmark on DARK backgrounds** (\`data-theme="dark"\`, dark hero/header):
-- \`${darkLogo}\`
-- Use when switching to dark theme (swap \`logo.src\` per the skill).
+These two URLs map **1:1** to Brand Editor fields \`logos.primary\` and \`logos.dark\`. **Do not invert.**
 
-URLs may be **SVG data-URI placeholders** (brand-colored) when no uploaded lockup exists — use them **exactly** as \`src\`; do not swap in generic or Enkrypt assets.
+| Brand Editor field | When to use (page theme) | Lockup appearance | **Exact \`src\` URL** |
+|--------------------|---------------------------|-------------------|----------------------|
+| \`logos.primary\` | \`data-theme="light"\` (light UI: white/light header & surfaces) | **Dark-colored** wordmark on light bg | \`${lightLogo}\` |
+| \`logos.dark\` | \`data-theme="dark"\` (dark UI: dark header & surfaces) | **Light/white** wordmark on dark bg | \`${darkLogo}\` |
 
-Implement theme toggle + logo swap per the skill. **Deliverable:** One complete HTML5 document (\`<!DOCTYPE html>\` … \`</html>\`), self-contained. Primary CTA / gradients must follow **BRAND VISUAL OVERRIDE** when that section appears below; otherwise follow \`cta-primary\` in the skill. No markdown fences in the output.
+**MANDATORY theme-toggle script logic:**
+- Include a **visible** theme control (button or switch) per the skill; persist choice (e.g. \`localStorage\`) and honor \`prefers-color-scheme\` for **initial** \`data-theme\` when no saved preference.
+- Set \`<html data-theme="light"|"dark">\` on load and on every toggle.
+- \`<img id="logo" … />\` must use the URL from the table row that matches the **current** \`data-theme\`.
+- On every theme change: \`logo.src = isDark ? ${JSON.stringify(darkLogo)} : ${JSON.stringify(lightLogo)};\`
+  - \`isDark === true\` → \`logos.dark\` URL (light/white glyph for dark surfaces).
+  - \`isDark === false\` → \`logos.primary\` URL (dark glyph for light surfaces).
+- Example initial tag when starting light: \`<img id="logo" src="${escAttr(lightLogo)}" alt="${escAttr(company)}" />\`.
+
+**FORBIDDEN:** Dark-only landings with no light skin; using one logo URL for both themes; using \`logos.dark\` on light header; using \`logos.primary\` on dark header; inventing /brand/ paths not listed above.
+
+URLs may be **SVG data-URI placeholders** when no upload exists — still treat as **light theme = primary URL**, **dark theme = dark URL**.
+
+**Deliverable:** One complete HTML5 document (\`<!DOCTYPE html>\` … \`</html>\`), self-contained, **enkrypt-frontend-design** patterns, **both light and dark** themes working, with \`data-theme\` + logo swap. Primary CTA / gradients: **BRAND VISUAL OVERRIDE** when present. No markdown fences in the output.
 `.trim();
 
   const parts = [skill || "(Skill file missing — use BRAND VISUAL OVERRIDE and RUNTIME ASSETS.)", runtime];

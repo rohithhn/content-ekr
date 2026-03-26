@@ -191,6 +191,6 @@ export const INPUT_MODES = [
 export const AI_MODELS = [
   { id: "anthropic", name: "Claude Opus 4.6", provider: "Anthropic", type: "text", color: "#D4A574", envKey: "ANTHROPIC_API_KEY", keyField: "anthropic_key", headerName: "x-anthropic-key" },
   { id: "openai", name: "GPT-5.4", provider: "OpenAI", type: "image", color: "#74AA9C", envKey: "OPENAI_API_KEY", keyField: "openai_key", headerName: "x-openai-key" },
-  { id: "nanobanana", name: "Nano Banana", provider: "Nano Banana", type: "image", color: "#FFD93D", envKey: "NANOBANANA_API_KEY", keyField: "nanobanana_key", headerName: "x-nanobanana-key" },
+  { id: "nanobanana", name: "Nano Banana 2", provider: "NanoBanana API", type: "image", color: "#FFD93D", envKey: "NANOBANANA_API_KEY", keyField: "nanobanana_key", headerName: "x-nanobanana-key" },
   { id: "kling", name: "Kling 2.0", provider: "Kuaishou", type: "video", color: "#FF6B6B", envKey: "KLING_API_KEY", keyField: "kling_key", headerName: "x-kling-key" },
 ];

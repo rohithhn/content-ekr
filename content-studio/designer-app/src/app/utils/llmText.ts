@@ -16,6 +16,9 @@ export const ENKRYPT_OPENAI_FAST_MODEL = "gpt-5.4-mini";
 
 export const ENKRYPT_GEMINI_CHAT_MODEL = "gemini-2.5-flash";
 
+/** Claude — visual brief / art-director step for designer (same as content-studio `llmConstants`). */
+export const ENKRYPT_ANTHROPIC_CHAT_MODEL = "claude-sonnet-4-20250514";
+
 /**
  * GPT-5.4 family on Chat Completions: `reasoning.effort: "none"` for low-latency, non-reasoning-style
  * output (OpenAI GPT-5.4 guide). Omitted for `gpt-5-chat-latest` (alias may not need it).

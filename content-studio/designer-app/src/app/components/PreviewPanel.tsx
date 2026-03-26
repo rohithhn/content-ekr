@@ -5,6 +5,10 @@ import type { PreviewToolbarApi } from "@/app/types/previewToolbar";
 import enkryptLogo from "@/assets/enkrypt-logo.png";
 import { pickDesignerLogoUrl } from "../../../../lib/brand/studioBrandBridge.js";
 import { ENKRYPT_PREVIEW_GRADIENT_STOPS } from "@studio-brand";
+import {
+  DEFAULT_TEXT_COLOR_SETTINGS,
+  normalizeTextColorSettings,
+} from "@/app/utils/textColorSettings";
 import bg1x1 from "@/assets/bg-1x1.png";
 import bg1x1Trns from "@/assets/bg-1x1-trns.png";
 import bg16x9 from "@/assets/placeholder-theme.svg";
@@ -24,17 +28,37 @@ function lerpHexPreview(a: string, b: string, t: number): string {
   const r = Math.round(pa.r + (pb.r - pa.r) * t);
   const g = Math.round(pa.g + (pb.g - pa.g) * t);
   const bl = Math.round(pa.b + (pb.b - pa.b) * t);
-  return `rgb(${r},${g},${bl})`;
+  return `#${((1 << 24) | (r << 16) | (g << 8) | bl).toString(16).slice(1).toUpperCase()}`;
 }
 
 function gradientStopsFromStudio(
-  studio: { colors?: { primary?: string; secondary?: string } } | null | undefined,
+  studio: {
+    colors?: { primary?: string; secondary?: string } | null;
+    gradients?: Array<{ type?: string; stops?: Array<{ color?: string }> }> | null;
+  } | null | undefined,
 ): string[] {
   const p = studio?.colors?.primary?.trim();
   const s = studio?.colors?.secondary?.trim();
   if (p && s) {
     const mid = lerpHexPreview(p, s, 0.5);
     return [p, mid, s];
+  }
+  if (p) {
+    const mid = lerpHexPreview(p, "#000000", 0.22);
+    return [p, mid, p];
+  }
+  const g0 = studio?.gradients?.[0];
+  if (g0?.type === "linear" && g0.stops && g0.stops.length >= 2) {
+    const a = g0.stops[0]?.color?.trim();
+    const b = g0.stops[1]?.color?.trim();
+    if (a && b) {
+      const mid = lerpHexPreview(a, b, 0.5);
+      return [a, mid, b];
+    }
+    if (a) {
+      const mid = lerpHexPreview(a, "#000000", 0.22);
+      return [a, mid, a];
+    }
   }
   return [...ENKRYPT_PREVIEW_GRADIENT_STOPS];
 }
@@ -101,6 +125,8 @@ interface PreviewPanelProps {
     visualImageBorderRadius?: number;
     brandFromStudio?: {
       logos?: { primary?: string | null; dark?: string | null };
+      colors?: { primary?: string; secondary?: string } | null;
+      gradients?: Array<{ type?: string; stops?: Array<{ color?: string }> }> | null;
     } | null;
   } | null;
   shouldRender: number;
@@ -128,6 +154,20 @@ const weightStr = (w: number) => {
 
 const CANVAS_FONT = "Inter, sans-serif";
 const DEFAULT_SLOT_GAP = 14;
+
+/** Stable reference — must not be a fresh object each render (canvas effect deps). */
+const PREVIEW_DEFAULT_TEXT_COLORS = DEFAULT_TEXT_COLOR_SETTINGS;
+const PREVIEW_DEFAULT_FS = {
+  heading: { size: 40, weight: 600 },
+  subheading: { size: 27, weight: 600 },
+  footer: { size: 24, weight: 400 },
+};
+const PREVIEW_DEFAULT_V_SLOT = { widthPct: 100, heightPct: 100, yPct: 14 };
+const PREVIEW_DEFAULT_T_SLOTS = {
+  heading: { yPct: 7 },
+  subheading: { yPct: 10 },
+  footer: { yPct: 80 },
+};
 
 /** Count wrapped lines and return total pixel height */
 function measureWrappedHeight(
@@ -165,7 +205,12 @@ export function PreviewPanel({ settings, shouldRender, toolbar }: PreviewPanelPr
   const [editOverlayOpen, setEditOverlayOpen] = useState(false);
 
   const s = settings;
-  const currentSize = s?.size ?? { width: 1080, height: 1080 };
+  const canvasW = s?.size?.width ?? 1080;
+  const canvasH = s?.size?.height ?? 1080;
+  const currentSize = useMemo(
+    () => ({ width: canvasW, height: canvasH }),
+    [canvasW, canvasH],
+  );
   const pad = s?.padding ?? 20;
   const logoPos = s?.logoPosition ?? "top-left";
   const logoScale = s?.logoScale ?? 60;
@@ -176,22 +221,23 @@ export function PreviewPanel({ settings, shouldRender, toolbar }: PreviewPanelPr
   const useH = s?.useHeading ?? true;
   const useSH = s?.useSubheading ?? true;
   const useF = s?.useFooter ?? true;
-  const fs = s?.fontSettings ?? {
-    heading: { size: 40, weight: 600 },
-    subheading: { size: 27, weight: 600 },
-    footer: { size: 24, weight: 400 },
-  };
-  const vSlot = s?.visualSlot ?? { widthPct: 100, heightPct: 100, yPct: 14 };
-  const tSlots = s?.textSlots ?? {
-    heading: { yPct: 7 },
-    subheading: { yPct: 10 },
-    footer: { yPct: 80 },
-  };
-  const tColors = s?.textColorSettings ?? {
-    heading: { baseColor: "#FFFFFF", useGradient: true, wordStyles: {} },
-    subheading: { baseColor: "#000000", useGradient: false, wordStyles: {} },
-    footer: { baseColor: "#FFFFFF", useGradient: true, wordStyles: {} },
-  };
+  const fs = s?.fontSettings ?? PREVIEW_DEFAULT_FS;
+  const vSlot = s?.visualSlot ?? PREVIEW_DEFAULT_V_SLOT;
+  const tSlots = s?.textSlots ?? PREVIEW_DEFAULT_T_SLOTS;
+  const textColorSettingsKey = JSON.stringify(s?.textColorSettings ?? null);
+  const tColors = useMemo(
+    () =>
+      normalizeTextColorSettings(
+        s?.textColorSettings ?? PREVIEW_DEFAULT_TEXT_COLORS,
+      ),
+    [textColorSettingsKey],
+  );
+  const contentKey = content
+    ? `${content.heading}\u0000${content.subheading}\u0000${content.footer}`
+    : "";
+  const fontSettingsKey = JSON.stringify(s?.fontSettings ?? null);
+  const visualSlotKey = JSON.stringify(s?.visualSlot ?? null);
+  const textSlotsKey = JSON.stringify(s?.textSlots ?? null);
   const slotGap = s?.slotGap ?? DEFAULT_SLOT_GAP;
   const visualImageBorderRadius = s?.visualImageBorderRadius ?? 12;
   const designerWhiteBg = !!s?.designerWhiteBg;
@@ -199,9 +245,10 @@ export function PreviewPanel({ settings, shouldRender, toolbar }: PreviewPanelPr
     pickDesignerLogoUrl(s?.brandFromStudio ?? null, designerWhiteBg) ||
     enkryptLogo;
 
+  const brandStudioKey = JSON.stringify(s?.brandFromStudio ?? null);
   const brandGradientStops = useMemo(
     () => gradientStopsFromStudio(s?.brandFromStudio ?? null),
-    [s?.brandFromStudio?.colors?.primary, s?.brandFromStudio?.colors?.secondary],
+    [brandStudioKey],
   );
 
   useEffect(() => {
@@ -524,7 +571,10 @@ export function PreviewPanel({ settings, shouldRender, toolbar }: PreviewPanelPr
     // ── Logo ──
     function drawLogo(cb: () => void) {
       const logoImg = new Image();
-      logoImg.crossOrigin = "anonymous";
+      // `crossOrigin` forces CORS; omit for data:/blob: URLs and avoid breaking same-origin relative paths.
+      if (/^https?:\/\//i.test(logoSrc)) {
+        logoImg.crossOrigin = "anonymous";
+      }
       logoImg.onload = () => {
         const scale = logoScale / 100;
         const baseH = Math.min(W, H) / 12;
@@ -691,14 +741,43 @@ export function PreviewPanel({ settings, shouldRender, toolbar }: PreviewPanelPr
     }
 
     function hexToRgb(hex: string) {
+      if (!hex) return { r: 0, g: 0, b: 0 };
+      const rgbMatch = hex.match(/^rgb\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/);
+      if (rgbMatch) {
+        return { r: +rgbMatch[1], g: +rgbMatch[2], b: +rgbMatch[3] };
+      }
       const h = hex.replace("#", "");
-      return {
-        r: parseInt(h.substring(0, 2), 16),
-        g: parseInt(h.substring(2, 4), 16),
-        b: parseInt(h.substring(4, 6), 16),
-      };
+      const r = parseInt(h.substring(0, 2), 16);
+      const g = parseInt(h.substring(2, 4), 16);
+      const b = parseInt(h.substring(4, 6), 16);
+      if (Number.isNaN(r) || Number.isNaN(g) || Number.isNaN(b)) return { r: 255, g: 116, b: 4 };
+      return { r, g, b };
     }
-  }, [currentSize, pad, logoPos, logoScale, hideLogo, slotGap, visualImage, content, useH, useSH, useF, shouldRender, fs, vSlot, tSlots, currentMode, tColors, exportTrigger, s?.postSizeId, visualImageBorderRadius, logoSrc, designerWhiteBg, brandGradientStops]);
+  }, [
+    currentSize,
+    pad,
+    logoPos,
+    logoScale,
+    hideLogo,
+    slotGap,
+    visualImage,
+    contentKey,
+    useH,
+    useSH,
+    useF,
+    shouldRender,
+    fontSettingsKey,
+    visualSlotKey,
+    textSlotsKey,
+    currentMode,
+    textColorSettingsKey,
+    exportTrigger,
+    s?.postSizeId,
+    visualImageBorderRadius,
+    logoSrc,
+    designerWhiteBg,
+    brandStudioKey,
+  ]);
 
   const handleDownload = () => {
     const canvas = canvasRef.current;

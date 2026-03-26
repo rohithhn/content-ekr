@@ -2,13 +2,13 @@ import Anthropic from "@anthropic-ai/sdk";
 
 export const PREPARE_SOURCE_MODEL = "claude-sonnet-4-20250514";
 
-const PREPARE_SYSTEM = `You are a senior editor preparing source material for a multi-channel content studio (LinkedIn, Twitter/X, blog, long articles, landing pages, HTML video).
+const PREPARE_SYSTEM = `You are a senior editor preparing source material for a multi-channel content studio (LinkedIn, Twitter/X, blog, long articles, landing pages, HTML video, short Kling text-to-video prompts).
 Output ONE plain-text brief the downstream AI will use as its primary factual source for writing channel-specific copy.
 
 Rules:
 - Preserve facts, names, numbers, and quotes accurately. Do not invent details.
 - Use markdown sections: ## Summary (2–4 sentences), ## Key points (5–12 bullets), ## Audience & angle, ## Channel notes (one short paragraph or bullets per target channel), ## Visual direction (only if image generation is planned — concrete scenes, metaphors, diagrams; avoid generic stock imagery).
-- Channel notes should reflect format constraints (e.g. Twitter length, LinkedIn professional tone, blog SEO depth, landing conversion sections, HTML video = scene-by-scene beats for a 1280×720 auto-play single-file demo).
+- Channel notes should reflect format constraints (e.g. Twitter length, LinkedIn professional tone, blog SEO depth, landing conversion sections, HTML video = scene-by-scene beats for a 1280×720 auto-play single-file demo, short video = cinematic beats for a 5–15s text-to-video API).
 - Do not write final platform posts here — only the structured brief.`;
 
 /**

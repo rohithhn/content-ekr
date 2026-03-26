@@ -1,5 +1,5 @@
 "use client";
-import { useState, useEffect, useRef, useMemo } from "react";
+import { useState, useEffect, useLayoutEffect, useRef, useMemo, useCallback } from "react";
 import { createPortal } from "react-dom";
 import {
   CHANNELS,
@@ -11,13 +11,33 @@ import {
   STUDIO_TEXT_MODEL_OPTIONS,
   STUDIO_IMAGE_MODEL_OPTIONS,
   STUDIO_VIDEO_MODEL_OPTIONS,
+  STUDIO_IMAGE_PROVIDER_OPENAI,
+  STUDIO_IMAGE_PROVIDER_GEMINI,
+  DEFAULT_STUDIO_IMAGE_PROVIDER,
+  isStudioImageProviderId,
   loadStudioModelPrefs,
   saveStudioModelPrefs,
   normalizeStudioTextModel,
   normalizeStudioImageModel,
   normalizeStudioVideoModel,
 } from "@/config/constants";
-import { generateContentBundle, generateText, generateImage, generateDesignerStructure, parseUrl, prepareSourceArticle, analyzeUploadedFile, checkProviderStatus, reviseLandingPage } from "@/lib/ai/orchestrator";
+import {
+  generateContentBundle,
+  generateText,
+  generateImage,
+  generateDesignerStructure,
+  parseUrl,
+  prepareSourceArticle,
+  analyzeUploadedFile,
+  getNotionAuthUrl,
+  syncNotionPages,
+  checkProviderStatus,
+  reviseLandingPage,
+  generateVideo,
+  fetchKieVideoTaskStatus,
+  consumeTextStream,
+} from "@/lib/ai/orchestrator";
+import { parseTextVariants } from "@/lib/ai/parseTextVariants";
 import { saveBrand, loadBrands, saveProject, loadProjects, loadProjectMessages } from "@/lib/db/index";
 import DesignerOverlay, { primeDesignerEmbed } from "@/components/DesignerOverlay";
 import DesignerMiniPreview from "@/components/DesignerMiniPreview";
@@ -33,22 +53,82 @@ import {
   isEnkryptStudioBrand,
   syncEnkryptMarketingPrimaryToCanonical,
 } from "@/lib/brand/enkrypt-defaults";
+import { buildDesignerBrandSkillExport } from "@/lib/brand/generateDesignerBrandSkill";
+
+/**
+ * Drop prose/markdown after the real closing </html> so sealPartialHtmlForIframe stays valid.
+ * If anything that looks like markup follows the last "</html>", do not trim — that substring may
+ * be inside a script/template; trimming would drop the rest of the file (including logos).
+ */
+function trimAfterLastClosingHtml(html) {
+  const s = String(html || "");
+  const lower = s.toLowerCase();
+  const idx = lower.lastIndexOf("</html>");
+  if (idx === -1) return s;
+  const after = s.slice(idx + 7);
+  // Any tag-like `<…` after the supposed close → do not strip (or we may cut real </body>/<script> tails).
+  if (/<[!\/?a-z]/i.test(after)) return s;
+  return s.slice(0, idx + 7).trim();
+}
+
+/** Blob iframe previews: match srcDoc behavior so root-relative RUNTIME logo URLs (/brand/…) resolve. */
+function injectPreviewBaseHref(html) {
+  if (typeof window === "undefined" || !html) return html;
+  const origin = window.location?.origin;
+  if (!origin || /<base\s/i.test(html)) return html;
+  const href = `${origin.replace(/"/g, "&quot;")}/`;
+  const tag = `<base href="${href}">`;
+  const m = html.match(/<head[^>]*>/i);
+  if (m && m.index !== undefined) {
+    const insertAt = m.index + m[0].length;
+    return `${html.slice(0, insertAt)}\n${tag}${html.slice(insertAt)}`;
+  }
+  return html;
+}
 
 /** For html-video channel: strip markdown fences and slice from <!DOCTYPE or <html>. */
 function extractHtmlVideoDocument(text) {
   if (!text || typeof text !== "string") return "";
   const trimmed = text.trim();
   const fence = /^```(?:html)?\s*\n([\s\S]*?)\n```\s*$/im.exec(trimmed);
-  if (fence) return fence[1].trim();
+  if (fence) return trimAfterLastClosingHtml(fence[1].trim());
   const docIdx = trimmed.search(/<!DOCTYPE\s+html/i);
-  if (docIdx >= 0) return trimmed.slice(docIdx);
+  if (docIdx >= 0) return trimAfterLastClosingHtml(trimmed.slice(docIdx));
   const htmlIdx = trimmed.search(/<html[\s>]/i);
-  if (htmlIdx >= 0) return trimmed.slice(htmlIdx);
-  return trimmed;
+  if (htmlIdx >= 0) return trimAfterLastClosingHtml(trimmed.slice(htmlIdx));
+  return trimAfterLastClosingHtml(trimmed);
 }
 
 /** Landing channel: same extraction as HTML video — full document from model. */
 const extractLandingPageDocument = extractHtmlVideoDocument;
+
+/**
+ * Close likely-open tags so an iframe can render streamed HTML before `</html>` arrives.
+ * Preview-only — downloaded / opened-in-tab HTML stays the raw model output elsewhere.
+ */
+function sealPartialHtmlForIframe(raw) {
+  const s = String(raw || "").trim();
+  if (!s) return s;
+  if (/<\/html>\s*$/i.test(s)) return s;
+  const lower = s.toLowerCase();
+  if (!lower.includes("<html")) return s;
+  let out = s;
+  if (lower.includes("<body")) {
+    if (!lower.includes("</body>")) out += "</body>";
+  } else if (lower.includes("<head")) {
+    if (!lower.includes("</head>")) out += "</head>";
+    if (!lower.includes("<body")) out += "<body></body>";
+  } else {
+    out += "<body></body>";
+  }
+  if (!/<\/html>\s*$/i.test(out)) out += "</html>";
+  return out;
+}
+
+function hasIframeHtmlStart(extracted) {
+  const d = String(extracted || "").trim();
+  return d.length > 0 && (/<!DOCTYPE\s+html/i.test(d) || /<html[\s>]/i.test(d));
+}
 
 function isFullLandingHtml(text) {
   if (!text || typeof text !== "string") return false;
@@ -59,17 +139,20 @@ function isFullLandingHtml(text) {
 /** prepare-source brief before full-page Opus is redundant for these channels; skipping saves one Claude call. */
 function shouldSkipChannelBriefForUrl(channels) {
   if (!channels?.length) return false;
-  return channels.every((id) => id === "landing" || id === "html-video");
+  return channels.every((id) => id === "landing" || id === "html-video" || id === "short-video");
 }
 
 function loadingTextForTextPhase(activeChannels) {
   if (!activeChannels?.length) return "Generating text…";
   const only = activeChannels.length === 1 ? activeChannels[0] : null;
   if (only === "landing") {
-    return "Building full landing page (Claude Opus — a complete page often takes 2–8 min)…";
+    return "Streaming landing page from Claude (like the Claude app — full page still takes a few minutes)…";
   }
   if (only === "html-video") {
-    return "Building HTML video (Claude Opus — large single file, often several minutes)…";
+    return "Streaming HTML video from Claude (output appears as it’s written)…";
+  }
+  if (only === "short-video") {
+    return "Writing Kling video prompt (Claude)…";
   }
   if (activeChannels.some((id) => id === "landing" || id === "html-video")) {
     return `Generating for ${activeChannels.length} channels — landing / HTML video steps are the slowest…`;
@@ -123,6 +206,70 @@ function brandInitial(brand) {
   return "?";
 }
 const fieldStyle = { padding: "12px 14px", borderRadius: 10, border: "1px solid rgba(255,255,255,0.08)", background: "rgba(255,255,255,0.04)", color: "#E2E4EA", fontSize: 14, fontFamily: "'DM Sans', sans-serif", outline: "none", width: "100%", boxSizing: "border-box" };
+
+function normalizeBrandAiContext(brand) {
+  const src = brand?.ai_context && typeof brand.ai_context === "object" ? brand.ai_context : {};
+  const docs = Array.isArray(src.documents) ? src.documents.filter(Boolean) : [];
+  const notion = src.notion && typeof src.notion === "object" ? src.notion : {};
+  return {
+    enabledByDefault: src.enabledByDefault !== false,
+    notes: typeof src.notes === "string" ? src.notes : "",
+    documents: docs,
+    notion: {
+      enabled: !!notion.enabled,
+      urls: Array.isArray(notion.urls) ? notion.urls.filter((u) => typeof u === "string" && u.trim()) : [],
+      notes: typeof notion.notes === "string" ? notion.notes : "",
+      workspaceName: typeof notion.workspaceName === "string" ? notion.workspaceName : "",
+      syncedPages: Array.isArray(notion.syncedPages) ? notion.syncedPages.filter(Boolean) : [],
+    },
+  };
+}
+
+function buildBrandContextAttachment(brand, { includeBrandContext, includeNotionContext }) {
+  if (!includeBrandContext || !brand) return "";
+  const ctx = normalizeBrandAiContext(brand);
+  const blocks = [];
+  if (ctx.notes.trim()) {
+    blocks.push(`General context:\n${ctx.notes.trim()}`);
+  }
+  if (ctx.documents.length) {
+    const docBlocks = ctx.documents
+      .map((doc, idx) => {
+        const title = (doc?.name && String(doc.name).trim()) || `Context ${idx + 1}`;
+        const content = doc?.content && String(doc.content).trim() ? String(doc.content).trim() : "";
+        if (!content) return "";
+        return `${idx + 1}. ${title}\n${content}`;
+      })
+      .filter(Boolean);
+    if (docBlocks.length) {
+      blocks.push(`Document context:\n${docBlocks.join("\n\n")}`);
+    }
+  }
+  if (includeNotionContext && ctx.notion?.enabled) {
+    const syncedPages = Array.isArray(ctx.notion?.syncedPages) ? ctx.notion.syncedPages : [];
+    if (syncedPages.length) {
+      blocks.push(
+        `Notion synced pages:\n${syncedPages
+          .map((p, i) => `${i + 1}. ${p.name || "Untitled page"}\n${String(p.content || "").trim()}`)
+          .join("\n\n")
+          .slice(0, 32000)}`
+      );
+    } else if (ctx.notion.urls.length) {
+      blocks.push(
+        `Notion references (linked but not synced yet):\n${ctx.notion.urls
+          .map((u) => `- ${u}`)
+          .join("\n")}`
+      );
+    }
+    if (ctx.notion.notes?.trim()) {
+      blocks.push(`Notion notes:\n${ctx.notion.notes.trim()}`);
+    }
+  }
+  if (!blocks.length) return "";
+  return `\n\n=== BRAND KNOWLEDGE CONTEXT (${brand.company_name || brand.name || "Brand"}) ===\n${blocks.join(
+    "\n\n"
+  )}\n=== END BRAND KNOWLEDGE CONTEXT ===`;
+}
 
 /** Multiselect indices for visual variants; falls back to legacy `selectedIdx`. */
 function getVisualSelectedIndices(slot) {
@@ -280,7 +427,7 @@ function mdToHtml(text) {
 
 function ExportModal({ open, onClose, activeChannels, currentBundle, addToast, activeBrand }) {
   if (!open) return null;
-  const formats = { linkedin: [{ label: "Copy Text", lucide: "Copy", act: "copy" }, { label: "Download Markdown", lucide: "FileText", act: "md" }], twitter: [{ label: "Copy Tweet", lucide: "Copy", act: "copy" }], blog: [{ label: "Download Markdown", lucide: "FileText", act: "md" }, { label: "Download HTML", lucide: "Globe", act: "html" }, { label: "Copy Text", lucide: "Copy", act: "copy" }], article: [{ label: "Download Markdown", lucide: "FileText", act: "md" }, { label: "Download HTML", lucide: "Globe", act: "html" }, { label: "Copy Text", lucide: "Copy", act: "copy" }], landing: [{ label: "Download HTML", lucide: "Globe", act: "html" }, { label: "Open Preview in Browser", lucide: "ExternalLink", act: "preview" }, { label: "Copy Source", lucide: "Copy", act: "copy" }], "html-video": [{ label: "Download HTML Video", lucide: "Globe", act: "html" }, { label: "Open Preview in Browser", lucide: "ExternalLink", act: "preview" }, { label: "Copy Source", lucide: "Copy", act: "copy" }] };
+  const formats = { linkedin: [{ label: "Copy Text", lucide: "Copy", act: "copy" }, { label: "Download Markdown", lucide: "FileText", act: "md" }], twitter: [{ label: "Copy Tweet", lucide: "Copy", act: "copy" }], blog: [{ label: "Download Markdown", lucide: "FileText", act: "md" }, { label: "Download HTML", lucide: "Globe", act: "html" }, { label: "Copy Text", lucide: "Copy", act: "copy" }], article: [{ label: "Download Markdown", lucide: "FileText", act: "md" }, { label: "Download HTML", lucide: "Globe", act: "html" }, { label: "Copy Text", lucide: "Copy", act: "copy" }], landing: [{ label: "Download HTML", lucide: "Globe", act: "html" }, { label: "Open Preview in Browser", lucide: "ExternalLink", act: "preview" }, { label: "Copy Source", lucide: "Copy", act: "copy" }], "html-video": [{ label: "Download HTML Video", lucide: "Globe", act: "html" }, { label: "Open Preview in Browser", lucide: "ExternalLink", act: "preview" }, { label: "Copy Source", lucide: "Copy", act: "copy" }], "short-video": [{ label: "Copy Kling prompt", lucide: "Copy", act: "copy" }, { label: "Download prompt (.txt)", lucide: "FileText", act: "txt" }] };
   const doExport = (chId, act) => {
     const d = currentBundle?.[chId]; if (!d?.textVariants?.length) { addToast("No content to export", "warning"); return; }
     const text = d.textVariants[d.selectedTextIdx]?.text || ""; const ch = CHANNELS.find(c => c.id === chId);
@@ -288,7 +435,7 @@ function ExportModal({ open, onClose, activeChannels, currentBundle, addToast, a
     else if (act === "md") { downloadFile(text, `${ch?.label || chId}.md`, "text/markdown"); addToast("Downloaded Markdown", "success"); }
     else if (act === "preview" && chId === "landing") {
       const html = extractLandingPageDocument(text);
-      const blob = new Blob([html], { type: "text/html" });
+      const blob = new Blob([injectPreviewBaseHref(html)], { type: "text/html" });
       const url = URL.createObjectURL(blob);
       window.open(url, "_blank");
       setTimeout(() => URL.revokeObjectURL(url), 60000);
@@ -296,11 +443,15 @@ function ExportModal({ open, onClose, activeChannels, currentBundle, addToast, a
     }
     else if (act === "preview" && chId === "html-video") {
       const html = extractHtmlVideoDocument(text);
-      const blob = new Blob([html], { type: "text/html" });
+      const blob = new Blob([injectPreviewBaseHref(html)], { type: "text/html" });
       const url = URL.createObjectURL(blob);
       window.open(url, "_blank");
       setTimeout(() => URL.revokeObjectURL(url), 60000);
       addToast("Opened HTML video preview", "success");
+    }
+    else if (act === "txt" && chId === "short-video") {
+      downloadFile(text, `${activeBrand?.company_name || "Short-Video"}-kling-prompt.txt`, "text/plain");
+      addToast("Downloaded video prompt", "success");
     }
     else if (act === "html") {
       if (chId === "html-video") {
@@ -334,9 +485,22 @@ function ExportModal({ open, onClose, activeChannels, currentBundle, addToast, a
 }
 
 // ─── Brand Editor ───────────────────────────────────────────────────────
-function BrandEditor({ open, onClose, onSave, editBrand }) {
+function BrandEditor({ open, onClose, onSave, editBrand, apiKeys = {} }) {
   const emptyBrandTemplate = useMemo(() => createBrandEditorEmptyDefaults(), []);
   const [b, setB] = useState(emptyBrandTemplate); const [sec, setSec] = useState("basics"); const [tagInput, setTagInput] = useState({ tone: "", use: "", avoid: "" });
+  const [skillExportNotice, setSkillExportNotice] = useState("");
+  const [contextUploadBusy, setContextUploadBusy] = useState(false);
+  const [notionBusy, setNotionBusy] = useState(false);
+  const [notionConnected, setNotionConnected] = useState(false);
+  const [contextDraftTitle, setContextDraftTitle] = useState("");
+  const [contextDraftBody, setContextDraftBody] = useState("");
+  const contextFileInputRef = useRef(null);
+  const notionPopupRef = useRef(null);
+  const skillNoticeTimerRef = useRef(null);
+  const notionStorageKey = useMemo(
+    () => `ce_notion_token_${editBrand?.id || b?.id || "draft_brand"}`,
+    [editBrand?.id, b?.id]
+  );
   useEffect(() => {
     if (!open) return;
     if (editBrand) {
@@ -365,6 +529,71 @@ function BrandEditor({ open, onClose, onSave, editBrand }) {
     }
     setSec("basics");
   }, [open, editBrand, emptyBrandTemplate]);
+  useEffect(() => {
+    if (!open) {
+      setSkillExportNotice("");
+      if (skillNoticeTimerRef.current) {
+        clearTimeout(skillNoticeTimerRef.current);
+        skillNoticeTimerRef.current = null;
+      }
+    }
+  }, [open]);
+  useEffect(() => {
+    if (!open || typeof window === "undefined") return;
+    try {
+      const token = localStorage.getItem(notionStorageKey);
+      setNotionConnected(!!String(token || "").trim());
+    } catch {
+      setNotionConnected(false);
+    }
+  }, [open, notionStorageKey]);
+  const syncNotionWithToken = async (token, pageUrls = []) => {
+    const res = await syncNotionPages({ token, pageUrls });
+    const mapped = (res.pages || []).map((p) => ({
+      id: `notion-${p.id}`,
+      name: p.title || "Notion page",
+      type: "notion",
+      size: String(p.content || "").length,
+      content: p.content || "",
+      sourceUrl: p.url || "",
+      notionPageId: p.id,
+      addedAt: new Date().toISOString(),
+    }));
+    set("ai_context.notion.syncedPages", mapped);
+    return mapped.length;
+  };
+  useEffect(() => {
+    if (!open || typeof window === "undefined") return;
+    const onMsg = async (event) => {
+      if (event.origin !== window.location.origin) return;
+      const payload = event.data;
+      if (!payload || payload.source !== "ce-notion-oauth") return;
+      try {
+        const expectedState = sessionStorage.getItem("ce_notion_oauth_state");
+        if (expectedState && payload.state && expectedState !== payload.state) {
+          setSkillExportNotice("Notion connect failed: OAuth state mismatch");
+          return;
+        }
+      } catch {}
+      if (!payload.ok) {
+        setSkillExportNotice(`Notion connect failed: ${payload.error || "unknown error"}`);
+        return;
+      }
+      try {
+        localStorage.setItem(notionStorageKey, String(payload.token || ""));
+        setNotionConnected(true);
+        set("ai_context.notion.enabled", true);
+        if (payload.workspace_name) {
+          set("ai_context.notion.workspaceName", payload.workspace_name);
+        }
+        const pageUrls = Array.isArray(b.ai_context?.notion?.urls) ? b.ai_context.notion.urls : [];
+        const syncedCount = await syncNotionWithToken(String(payload.token || ""), pageUrls);
+        setSkillExportNotice(`Notion connected and synced ${syncedCount} page(s)`);
+      } catch {}
+    };
+    window.addEventListener("message", onMsg);
+    return () => window.removeEventListener("message", onMsg);
+  }, [open, notionStorageKey, b.ai_context?.notion?.urls]);
   if (!open) return null;
   const set = (path, val) => { setB(prev => { const n = JSON.parse(JSON.stringify(prev)); const p = path.split("."); let o = n; for (let i = 0; i < p.length - 1; i++) o = o[p[i]]; o[p[p.length - 1]] = val; return n; }); };
   const brandGradientCss = (() => {
@@ -414,8 +643,137 @@ function BrandEditor({ open, onClose, onSave, editBrand }) {
   };
   const primaryAsGradient = b.primary_as_gradient !== false;
   const previewPrimaryFill = primaryAsGradient ? brandGradientCss : b.colors.primary;
+  const hasMarketingColorForSkill =
+    !!String(b.colors?.primary || "").trim() ||
+    !!String(b.gradients?.[0]?.stops?.[0]?.color || "").trim() ||
+    !!String(b.colors?.secondary || "").trim();
+  const canExportDesignerSkill = !!(b.name && b.company_name && hasMarketingColorForSkill);
+  const hasLogoUrls = !!(String(b.logos?.primary || "").trim() || String(b.logos?.dark || "").trim());
+  const exportDesignerSkill = () => {
+    if (!canExportDesignerSkill) return;
+    try {
+      const { folderName, markdown } = buildDesignerBrandSkillExport(b);
+      const blob = new Blob([markdown], { type: "text/markdown;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${folderName}-SKILL.md`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      if (skillNoticeTimerRef.current) clearTimeout(skillNoticeTimerRef.current);
+      setSkillExportNotice(`Downloaded ${folderName}-SKILL.md → place as .cursor/skills/${folderName}/SKILL.md`);
+      skillNoticeTimerRef.current = setTimeout(() => {
+        setSkillExportNotice("");
+        skillNoticeTimerRef.current = null;
+      }, 8000);
+    } catch {
+      if (skillNoticeTimerRef.current) clearTimeout(skillNoticeTimerRef.current);
+      setSkillExportNotice("Could not export skill. Try again.");
+      skillNoticeTimerRef.current = setTimeout(() => {
+        setSkillExportNotice("");
+        skillNoticeTimerRef.current = null;
+      }, 5000);
+    }
+  };
   const save = () => { if (!b.name || !b.company_name) return; onSave({ ...b, id: b.id || "brand-" + Date.now() }); onClose(); };
-  const sections = [{ id: "basics", label: "Basics", lucide: "Sparkles" }, { id: "colors", label: "Colors", lucide: "Palette" }, { id: "typography", label: "Type", lucide: "Type" }, { id: "tone", label: "Tone", lucide: "Theater" }, { id: "audience", label: "Audience", lucide: "Users" }, { id: "visual", label: "Visual", lucide: "Image" }, { id: "assets", label: "Assets", lucide: "Paperclip" }];
+  const sections = [{ id: "basics", label: "Basics", lucide: "Sparkles" }, { id: "colors", label: "Colors", lucide: "Palette" }, { id: "typography", label: "Type", lucide: "Type" }, { id: "tone", label: "Tone", lucide: "Theater" }, { id: "audience", label: "Audience", lucide: "Users" }, { id: "visual", label: "Visual", lucide: "Image" }, { id: "assets", label: "Assets", lucide: "Paperclip" }, { id: "context", label: "Context", lucide: "Database" }];
+  const addContextEntry = (entry) => {
+    const arr = Array.isArray(b.ai_context?.documents) ? b.ai_context.documents : [];
+    set("ai_context.documents", [...arr, entry]);
+  };
+  const removeContextEntry = (id) => {
+    const arr = Array.isArray(b.ai_context?.documents) ? b.ai_context.documents : [];
+    set("ai_context.documents", arr.filter((x) => x?.id !== id));
+  };
+  const addTextContext = () => {
+    const body = contextDraftBody.trim();
+    if (!body) return;
+    addContextEntry({
+      id: `ctx-${Date.now()}`,
+      name: contextDraftTitle.trim() || `Text context ${new Date().toLocaleDateString()}`,
+      type: "text",
+      size: body.length,
+      content: body,
+      addedAt: new Date().toISOString(),
+    });
+    setContextDraftTitle("");
+    setContextDraftBody("");
+  };
+  const onUploadContextFile = async (file) => {
+    if (!file) return;
+    setContextUploadBusy(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      fd.append("channels", JSON.stringify(["linkedin"]));
+      fd.append("templateId", "");
+      fd.append("willGenerateImages", "false");
+      const analyzed = await analyzeUploadedFile(fd, apiKeys);
+      const parsed = String(analyzed?.preparedInput || "").trim();
+      if (!parsed) throw new Error("No text extracted from file");
+      addContextEntry({
+        id: `ctx-${Date.now()}`,
+        name: file.name,
+        type: file.type || "document",
+        size: file.size || parsed.length,
+        content: parsed.slice(0, 20000),
+        addedAt: new Date().toISOString(),
+      });
+    } catch (err) {
+      setSkillExportNotice(`Context upload failed: ${err?.message || "unknown error"}`);
+    } finally {
+      setContextUploadBusy(false);
+      if (contextFileInputRef.current) contextFileInputRef.current.value = "";
+    }
+  };
+  const connectNotion = async () => {
+    if (notionBusy) return;
+    setNotionBusy(true);
+    try {
+      const state = `ce-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      if (typeof sessionStorage !== "undefined") {
+        sessionStorage.setItem("ce_notion_oauth_state", state);
+      }
+      const { url } = await getNotionAuthUrl(state);
+      const pop = window.open(url, "ce-notion-oauth", "popup=yes,width=620,height=760");
+      notionPopupRef.current = pop;
+      if (!pop) {
+        throw new Error("Popup blocked. Please allow popups for this site.");
+      }
+    } catch (error) {
+      setSkillExportNotice(
+        `Notion authorize failed: ${error?.message || "set NOTION_CLIENT_ID / NOTION_CLIENT_SECRET / NOTION_REDIRECT_URI in .env.local"}`
+      );
+    } finally {
+      setNotionBusy(false);
+    }
+  };
+  const disconnectNotion = () => {
+    try {
+      localStorage.removeItem(notionStorageKey);
+    } catch {}
+    setNotionConnected(false);
+    set("ai_context.notion.enabled", false);
+    set("ai_context.notion.syncedPages", []);
+    setSkillExportNotice("Notion disconnected");
+  };
+  const syncNotion = async () => {
+    if (notionBusy) return;
+    setNotionBusy(true);
+    try {
+      const token = localStorage.getItem(notionStorageKey) || "";
+      if (!token.trim()) throw new Error("Connect Notion first");
+      const pageUrls = Array.isArray(b.ai_context?.notion?.urls) ? b.ai_context.notion.urls : [];
+      const syncedCount = await syncNotionWithToken(token, pageUrls);
+      setSkillExportNotice(`Synced ${syncedCount} Notion page(s)`);
+    } catch (err) {
+      setSkillExportNotice(`Notion sync failed: ${err?.message || "unknown error"}`);
+    } finally {
+      setNotionBusy(false);
+    }
+  };
   const CInput = ({ label, value, onChange }) => (<div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}><div style={{ position: "relative", width: 36, height: 36, borderRadius: 8, border: "1px solid rgba(255,255,255,0.1)", overflow: "hidden", flexShrink: 0 }}><input type="color" value={value} onChange={e => onChange(e.target.value)} style={{ position: "absolute", inset: -8, width: 52, height: 52, cursor: "pointer", border: "none" }} /></div><div style={{ flex: 1 }}><div style={{ fontSize: 11, color: "#6B7084", marginBottom: 2 }}>{label}</div><input value={value} onChange={e => onChange(e.target.value)} style={{ ...fieldStyle, padding: "6px 10px", fontSize: 12, fontFamily: "'JetBrains Mono',monospace" }} /></div></div>);
   const Tags = ({ items, onAdd, onRemove, placeholder, stateKey }) => (<div><div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: items.length ? 8 : 0 }}>{items.map((t, i) => (<span key={i} style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, padding: "4px 10px", borderRadius: 6, background: "rgba(108,43,217,0.12)", color: "#C4B5FD" }}>{t}<span onClick={() => onRemove(i)} style={{ cursor: "pointer", opacity: 0.6, fontSize: 14 }}>×</span></span>))}</div><div style={{ display: "flex", gap: 6 }}><input value={tagInput[stateKey]} onChange={e => setTagInput(p => ({ ...p, [stateKey]: e.target.value }))} placeholder={placeholder} onKeyDown={e => { if (e.key === "Enter" && tagInput[stateKey].trim()) { onAdd(tagInput[stateKey].trim()); setTagInput(p => ({ ...p, [stateKey]: "" })); } }} style={{ ...fieldStyle, padding: "8px 12px", fontSize: 13, flex: 1 }} /><button onClick={() => { if (tagInput[stateKey].trim()) { onAdd(tagInput[stateKey].trim()); setTagInput(p => ({ ...p, [stateKey]: "" })); } }} style={{ padding: "8px 14px", borderRadius: 10, border: "none", background: "rgba(108,43,217,0.15)", color: "#C4B5FD", fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>Add</button></div></div>);
   const lbl = { fontSize: 12, fontWeight: 600, color: "#8B8DA3", marginBottom: 6, display: "block" }; const secT = { fontSize: 11, fontWeight: 700, color: "#52556B", textTransform: "uppercase", letterSpacing: "0.8px", marginBottom: 12, marginTop: 24 };
@@ -471,8 +829,227 @@ function BrandEditor({ open, onClose, onSave, editBrand }) {
         ))}
         <button onClick={() => set("sample_templates", [...(b.sample_templates || []), ""])} style={{ padding: "8px 14px", borderRadius: 8, border: "1px dashed rgba(255,255,255,0.1)", background: "transparent", color: "#6B7084", fontSize: 12, fontWeight: 500, cursor: "pointer", fontFamily: "inherit", width: "100%" }}>+ Add Template URL</button>
       </div>}
+      {sec === "context" && <div>
+        <div style={secT}>Brand Knowledge</div>
+        <label style={lbl}>
+          <input
+            type="checkbox"
+            checked={b.ai_context?.enabledByDefault !== false}
+            onChange={(e) => set("ai_context.enabledByDefault", e.target.checked)}
+            style={{ marginRight: 8 }}
+          />
+          Enabled by default in prompt composer
+        </label>
+        <label style={{ ...lbl, marginTop: 12 }}>Global context notes</label>
+        <textarea
+          value={b.ai_context?.notes || ""}
+          onChange={(e) => set("ai_context.notes", e.target.value)}
+          placeholder="Company knowledge, product details, compliance notes, messaging constraints..."
+          rows={5}
+          style={{ ...fieldStyle, resize: "vertical", marginBottom: 16 }}
+        />
+
+        <div style={secT}>Upload context documents</div>
+        <input
+          ref={contextFileInputRef}
+          type="file"
+          accept=".pdf,.doc,.docx,.txt,.md"
+          style={{ display: "none" }}
+          onChange={(e) => onUploadContextFile(e.target.files?.[0])}
+        />
+        <button
+          type="button"
+          onClick={() => contextFileInputRef.current?.click()}
+          disabled={contextUploadBusy}
+          style={{ padding: "8px 14px", borderRadius: 8, border: "1px solid rgba(255,255,255,0.12)", background: "rgba(255,255,255,0.04)", color: "#C4B5FD", fontSize: 12, fontWeight: 600, cursor: contextUploadBusy ? "default" : "pointer", fontFamily: "inherit" }}
+        >
+          {contextUploadBusy ? "Extracting…" : "Upload doc / pdf / txt"}
+        </button>
+        <div style={{ fontSize: 11, color: "#6B7084", marginTop: 8, lineHeight: 1.4 }}>
+          Uploaded files are parsed and stored as reusable brand context.
+        </div>
+
+        <div style={{ ...secT, marginTop: 20 }}>Add text snippet</div>
+        <input
+          value={contextDraftTitle}
+          onChange={(e) => setContextDraftTitle(e.target.value)}
+          placeholder="Optional title"
+          style={{ ...fieldStyle, marginBottom: 8 }}
+        />
+        <textarea
+          value={contextDraftBody}
+          onChange={(e) => setContextDraftBody(e.target.value)}
+          placeholder="Paste any notes, docs, policies, positioning, product details..."
+          rows={4}
+          style={{ ...fieldStyle, resize: "vertical", marginBottom: 8 }}
+        />
+        <button
+          type="button"
+          onClick={addTextContext}
+          style={{ padding: "8px 14px", borderRadius: 8, border: "1px solid rgba(108,43,217,0.4)", background: "rgba(108,43,217,0.12)", color: "#C4B5FD", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}
+        >
+          Add text context
+        </button>
+
+        <div style={{ ...secT, marginTop: 20 }}>Notion connector</div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
+          <button
+            type="button"
+            onClick={connectNotion}
+            disabled={notionBusy}
+            style={{ padding: "8px 14px", borderRadius: 8, border: "1px solid rgba(99,102,241,0.4)", background: "rgba(99,102,241,0.14)", color: "#A5B4FC", fontSize: 12, fontWeight: 600, cursor: notionBusy ? "default" : "pointer", fontFamily: "inherit" }}
+          >
+            {notionBusy ? "Authorizing..." : notionConnected ? "Re-authorize with Notion" : "Authorize with Notion"}
+          </button>
+          <button
+            type="button"
+            onClick={disconnectNotion}
+            disabled={!notionConnected}
+            style={{ padding: "8px 12px", borderRadius: 8, border: "1px solid rgba(239,68,68,0.35)", background: "rgba(239,68,68,0.12)", color: "#FCA5A5", fontSize: 12, fontWeight: 600, cursor: notionConnected ? "pointer" : "default", fontFamily: "inherit" }}
+          >
+            Disconnect
+          </button>
+          <span style={{ fontSize: 11, color: notionConnected ? "#86EFAC" : "#6B7084" }}>
+            {notionConnected ? `Connected${b.ai_context?.notion?.workspaceName ? ` · ${b.ai_context.notion.workspaceName}` : ""}` : "Not connected"}
+          </span>
+        </div>
+        <label style={lbl}>
+          <input
+            type="checkbox"
+            checked={!!b.ai_context?.notion?.enabled}
+            onChange={(e) => set("ai_context.notion.enabled", e.target.checked)}
+            style={{ marginRight: 8 }}
+          />
+          Use synced Notion content in prompts
+        </label>
+        <textarea
+          value={(b.ai_context?.notion?.urls || []).join("\n")}
+          onChange={(e) =>
+            set(
+              "ai_context.notion.urls",
+              e.target.value
+                .split("\n")
+                .map((x) => x.trim())
+                .filter(Boolean)
+            )
+          }
+          placeholder="Paste Notion page URLs, one per line"
+          rows={3}
+          style={{ ...fieldStyle, resize: "vertical", marginBottom: 8 }}
+        />
+        <textarea
+          value={b.ai_context?.notion?.notes || ""}
+          onChange={(e) => set("ai_context.notion.notes", e.target.value)}
+          placeholder="Optional notes for using these Notion references"
+          rows={2}
+          style={{ ...fieldStyle, resize: "vertical", marginBottom: 10 }}
+        />
+        <div style={{ fontSize: 11, color: "#6B7084", lineHeight: 1.45, marginBottom: 12 }}>
+          One click authorize: login in Notion, approve access, and pages are synced automatically.
+        </div>
+        {notionConnected ? (
+          <button
+            type="button"
+            onClick={syncNotion}
+            disabled={notionBusy}
+            style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid rgba(16,185,129,0.35)", background: "rgba(16,185,129,0.12)", color: "#6EE7B7", fontSize: 11, fontWeight: 600, cursor: notionBusy ? "default" : "pointer", fontFamily: "inherit", marginBottom: 10 }}
+          >
+            {notionBusy ? "Syncing..." : "Sync now"}
+          </button>
+        ) : null}
+        {(b.ai_context?.notion?.syncedPages || []).length > 0 ? (
+          <div style={{ marginBottom: 12 }}>
+            {(b.ai_context?.notion?.syncedPages || []).map((p) => (
+              <div key={p.id} style={{ border: "1px solid rgba(255,255,255,0.08)", borderRadius: 8, padding: "8px 10px", marginBottom: 6, background: "rgba(255,255,255,0.02)" }}>
+                <div style={{ fontSize: 12, color: "#E2E4EA", fontWeight: 600 }}>{p.name}</div>
+                <div style={{ fontSize: 10, color: "#6B7084" }}>{Math.max(0, Number(p.size) || 0)} chars</div>
+              </div>
+            ))}
+          </div>
+        ) : null}
+
+        <div style={secT}>Saved context entries</div>
+        {(b.ai_context?.documents || []).length === 0 ? (
+          <div style={{ fontSize: 12, color: "#6B7084" }}>No context entries yet.</div>
+        ) : (
+          (b.ai_context?.documents || []).map((doc) => (
+            <div key={doc.id} style={{ border: "1px solid rgba(255,255,255,0.08)", borderRadius: 10, padding: 10, marginBottom: 8, background: "rgba(255,255,255,0.02)" }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                <div style={{ fontSize: 12, fontWeight: 600, color: "#E2E4EA" }}>{doc.name || "Untitled context"}</div>
+                <button
+                  type="button"
+                  onClick={() => removeContextEntry(doc.id)}
+                  style={{ width: 24, height: 24, borderRadius: 6, border: "none", background: "rgba(239,68,68,0.14)", color: "#FCA5A5", cursor: "pointer" }}
+                >
+                  ×
+                </button>
+              </div>
+              <div style={{ fontSize: 11, color: "#6B7084", marginTop: 4 }}>
+                {doc.type || "text"} · {Math.max(0, Number(doc.size) || 0)} chars
+              </div>
+            </div>
+          ))
+        )}
+      </div>}
     </div>
-    <div style={{ padding: "16px 28px 20px", borderTop: "1px solid rgba(255,255,255,0.06)", display: "flex", gap: 10, justifyContent: "flex-end", flexShrink: 0 }}><button onClick={onClose} style={{ padding: "10px 20px", borderRadius: 9, border: "1px solid rgba(255,255,255,0.08)", background: "transparent", color: "#8B8DA3", fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>Cancel</button><button onClick={save} disabled={!b.name || !b.company_name} style={{ padding: "10px 24px", borderRadius: 9, border: "none", background: (b.name && b.company_name) ? "linear-gradient(135deg,#6C2BD9,#5B21B6)" : "rgba(255,255,255,0.06)", color: (b.name && b.company_name) ? "white" : "#52556B", fontSize: 13, fontWeight: 600, cursor: (b.name && b.company_name) ? "pointer" : "default", fontFamily: "inherit" }}>Save Brand</button></div>
+    <div style={{ padding: "16px 28px 20px", borderTop: "1px solid rgba(255,255,255,0.06)", flexShrink: 0 }}>
+      {skillExportNotice ? (
+        <div style={{ fontSize: 11, color: "#86EFAC", lineHeight: 1.45, marginBottom: 12, padding: "10px 12px", borderRadius: 8, background: "rgba(22,163,74,0.12)", border: "1px solid rgba(34,197,94,0.25)" }}>
+          {skillExportNotice}
+        </div>
+      ) : null}
+      <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 8, maxWidth: 340 }}>
+          {canExportDesignerSkill && !hasLogoUrls ? (
+            <div
+              role="status"
+              style={{
+                fontSize: 11,
+                color: "#8B8DA3",
+                lineHeight: 1.45,
+                display: "flex",
+                alignItems: "flex-start",
+                gap: 8,
+                padding: "8px 10px",
+                borderRadius: 8,
+                background: "rgba(255,255,255,0.03)",
+                border: "1px solid rgba(255,255,255,0.06)",
+              }}
+            >
+              <StudioLucide name="Lightbulb" size={14} color="#A78BFA" style={{ flexShrink: 0, marginTop: 1 }} />
+              <span>Add a logo in <strong style={{ color: "#A8ACB8", fontWeight: 600 }}>Assets</strong> for better designs and a richer exported skill.</span>
+            </div>
+          ) : null}
+          <button
+            type="button"
+            onClick={exportDesignerSkill}
+            disabled={!canExportDesignerSkill}
+            title={!canExportDesignerSkill ? "Add brand name, company name, and a marketing color (primary, gradient start, or secondary) to export" : "Download Cursor SKILL.md (extends Enkrypt visual-designer-content-flow)"}
+            style={{
+              padding: "10px 16px",
+              borderRadius: 9,
+              border: "1px solid rgba(108,43,217,0.35)",
+              background: canExportDesignerSkill ? "rgba(108,43,217,0.12)" : "rgba(255,255,255,0.03)",
+              color: canExportDesignerSkill ? "#C4B5FD" : "#52556B",
+              fontSize: 13,
+              fontWeight: 600,
+              cursor: canExportDesignerSkill ? "pointer" : "default",
+              fontFamily: "inherit",
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 8,
+            }}
+          >
+            <StudioLucide name="FileText" size={16} color={canExportDesignerSkill ? "#C4B5FD" : "#52556B"} />
+            Create designer skill
+          </button>
+        </div>
+        <div style={{ display: "flex", gap: 10, marginLeft: "auto" }}>
+          <button type="button" onClick={onClose} style={{ padding: "10px 20px", borderRadius: 9, border: "1px solid rgba(255,255,255,0.08)", background: "transparent", color: "#8B8DA3", fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>Cancel</button>
+          <button type="button" onClick={save} disabled={!b.name || !b.company_name} style={{ padding: "10px 24px", borderRadius: 9, border: "none", background: (b.name && b.company_name) ? "linear-gradient(135deg,#6C2BD9,#5B21B6)" : "rgba(255,255,255,0.06)", color: (b.name && b.company_name) ? "white" : "#52556B", fontSize: 13, fontWeight: 600, cursor: (b.name && b.company_name) ? "pointer" : "default", fontFamily: "inherit" }}>Save Brand</button>
+        </div>
+      </div>
+    </div>
   </div></div>);
 }
 
@@ -512,7 +1089,7 @@ function GenerationCard({ bundle, channels, onUpdateBundle, onCopy, onRegenerate
           <span style={{ fontSize: 11, fontWeight: 700, color: "#52556B", textTransform: "uppercase", letterSpacing: "0.5px" }}>Text · {chData.textVariants.length} variant{chData.textVariants.length !== 1 ? "s" : ""}</span>
           <div style={{ display: "flex", gap: 4 }}>{chData.textVariants.map((tv, i) => (<button key={tv.id} onClick={() => selectText(i)} style={pill(chData.selectedTextIdx === i, ch?.color)}>{tv.label}</button>))}</div>
         </div>
-        <div style={{ padding: "14px 16px", borderRadius: 12, background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)", fontSize: 13, color: "#C4C6D0", lineHeight: 1.7, maxHeight: 200, overflowY: "auto", ...(!["blog","article","landing","html-video"].includes(activeChTab) ? { whiteSpace: "pre-wrap" } : {}) }}>{activeChTab === "html-video" || activeChTab === "landing" ? <pre style={{ margin: 0, fontFamily: "'JetBrains Mono','Fira Code',monospace", fontSize: 10, whiteSpace: "pre-wrap", wordBreak: "break-all" }}>{currentText.length > 6000 ? `${currentText.slice(0, 6000)}…` : currentText}</pre> : ["blog","article"].includes(activeChTab) ? <SimpleMarkdown text={currentText} /> : currentText}</div>
+        <div style={{ padding: "14px 16px", borderRadius: 12, background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)", fontSize: 13, color: "#C4C6D0", lineHeight: 1.7, maxHeight: 200, overflowY: "auto", ...(!["blog","article","landing","html-video","short-video"].includes(activeChTab) ? { whiteSpace: "pre-wrap" } : {}) }}>{activeChTab === "html-video" || activeChTab === "landing" || activeChTab === "short-video" ? <pre style={{ margin: 0, fontFamily: "'JetBrains Mono','Fira Code',monospace", fontSize: 10, whiteSpace: "pre-wrap", wordBreak: "break-all" }}>{currentText.length > 6000 ? `${currentText.slice(0, 6000)}…` : currentText}</pre> : ["blog","article"].includes(activeChTab) ? <SimpleMarkdown text={currentText} /> : currentText}</div>
         <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 8 }}>
           <button type="button" onClick={() => onCopy?.(currentText)} style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid rgba(255,255,255,0.06)", background: "rgba(255,255,255,0.02)", color: "#6B7084", fontSize: 11, fontWeight: 500, cursor: "pointer", fontFamily: "inherit", display: "inline-flex", alignItems: "center", gap: 5 }}><StudioLucide name="Copy" size={13} color="#6B7084" /> Copy</button>
           <button type="button" onClick={() => onRegenerate?.(activeChTab)} disabled={isGenerating} style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid rgba(255,255,255,0.06)", background: "rgba(255,255,255,0.02)", color: isGenerating ? "#3A3B44" : "#6B7084", fontSize: 11, fontWeight: 500, cursor: isGenerating ? "default" : "pointer", fontFamily: "inherit", display: "inline-flex", alignItems: "center", gap: 5 }}>{isGenerating ? <StudioLucide name="Loader2" size={13} color="#3A3B44" /> : <StudioLucide name="RefreshCw" size={13} color="#6B7084" />} Regen</button>
@@ -577,13 +1154,17 @@ function LeftPanel({ activeTab, setActiveTab, collapsed, brands, activeBrandId, 
 function CenterPanel({ activeChannels, setActiveChannels, setActiveChannel, linkedinIncludeCarousel, setLinkedinIncludeCarousel, activeBrand, apiKeys, serverStatus, onSelectPreview, messages, setMessages, projectTitle, selectedTemplateId, setSelectedTemplateId, inputMode, setInputMode, tone, setTone, isGenerating, setIsGenerating, generationPhase, setGenerationPhase, addToast, onRegenerate, onGenerateImage, onOpenDesigner, designerPostSizeId, setDesignerPostSizeId, designerWhiteBg, setDesignerWhiteBg, designerThemeId, setDesignerThemeId, designerHideLogo = false, studioTextModel }) {
   const [inputValue, setInputValue] = useState("");
   const [uploadFile, setUploadFile] = useState(null);
+  const [useBrandContext, setUseBrandContext] = useState(true);
+  const [useNotionContext, setUseNotionContext] = useState(false);
   const [numText, setNumText] = useState(3); const [numVisual, setNumVisual] = useState(3); const [welcome, setWelcome] = useState(true);
   const ref = useRef(null); const endRef = useRef(null); const fileInputRef = useRef(null);
   const wasLandingOnlyRef = useRef(false);
   useEffect(() => {
     const landingOrVideoOnly =
       activeChannels.length === 1 &&
-      (activeChannels[0] === "landing" || activeChannels[0] === "html-video");
+      (activeChannels[0] === "landing" ||
+        activeChannels[0] === "html-video" ||
+        activeChannels[0] === "short-video");
     if (landingOrVideoOnly && !wasLandingOnlyRef.current) setNumVisual(0);
     if (landingOrVideoOnly) setNumText(1);
     wasLandingOnlyRef.current = landingOrVideoOnly;
@@ -591,6 +1172,11 @@ function CenterPanel({ activeChannels, setActiveChannels, setActiveChannel, link
 
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages, isGenerating]);
   useEffect(() => { setWelcome(messages.length === 0); }, [messages]);
+  useEffect(() => {
+    const ctx = normalizeBrandAiContext(activeBrand);
+    setUseBrandContext(ctx.enabledByDefault !== false);
+    setUseNotionContext(!!ctx.notion.enabled);
+  }, [activeBrand?.id]);
   const selectedTpl = selectedTemplateId ? TEMPLATES.find(t => t.id === selectedTemplateId) : null;
   const cfgModels = AI_MODELS.filter(m => apiKeys[m.keyField] || serverStatus?.[m.id]);
   const placeholder = selectedTpl?.placeholder || (inputMode === "url" ? "Paste a URL..." : inputMode === "topic" ? "Enter a topic..." : inputMode === "upload" ? "Optional notes to include with your file (Shift+Enter for newline)..." : "Write your content brief...");
@@ -620,6 +1206,8 @@ function CenterPanel({ activeChannels, setActiveChannels, setActiveChannel, link
       templateId: selectedTemplateId,
       numText,
       numVisual,
+      useBrandContext,
+      useNotionContext,
       linkedinIncludeCarousel,
       createdAt: new Date().toISOString(),
       time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
@@ -628,6 +1216,7 @@ function CenterPanel({ activeChannels, setActiveChannels, setActiveChannel, link
     if (inputMode !== "upload") setInputValue("");
     setIsGenerating(true);
 
+    let aiStreamMsgId = null;
     try {
       if (inputMode === "url") {
         setGenerationPhase("url");
@@ -637,7 +1226,7 @@ function CenterPanel({ activeChannels, setActiveChannels, setActiveChannel, link
           addToast("Article fetched", "success");
           if (shouldSkipChannelBriefForUrl(activeChannels)) {
             contentInput = merged;
-            addToast("Brief step skipped for landing / HTML video — using article text directly", "info");
+            addToast("Brief step skipped for landing / HTML / short video — using article text directly", "info");
           } else {
             addToast("Analyzing for your channels…", "info");
             setGenerationPhase("prepare");
@@ -687,9 +1276,47 @@ function CenterPanel({ activeChannels, setActiveChannels, setActiveChannel, link
         setGenerationPhase("text");
       }
 
+      const contextAttachment = buildBrandContextAttachment(activeBrand, {
+        includeBrandContext: useBrandContext,
+        includeNotionContext: useNotionContext,
+      });
+      if (contextAttachment) {
+        contentInput = `${contentInput}${contextAttachment}`;
+      }
+
       setMessages((p) =>
         p.map((m) => (m.id === userMsgId ? { ...m, preparedInput: contentInput } : m)),
       );
+
+      const useStreamUi =
+        activeChannels.length === 1 &&
+        (activeChannels[0] === "landing" || activeChannels[0] === "html-video");
+      if (useStreamUi) {
+        aiStreamMsgId = "msg-" + (Date.now() + 1);
+        const emptyBundle = Object.fromEntries(
+          activeChannels.map((ch) => [
+            ch,
+            {
+              textVariants: [{ id: "v-0", label: "A", text: "" }],
+              selectedTextIdx: 0,
+              visualSlots: [],
+              model: null,
+            },
+          ]),
+        );
+        setMessages((p) => [
+          ...p,
+          {
+            id: aiStreamMsgId,
+            role: "assistant",
+            channels: [...activeChannels],
+            bundle: emptyBundle,
+            streamLive: true,
+            createdAt: new Date().toISOString(),
+            time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+          },
+        ]);
+      }
 
       const bundle = await generateContentBundle({
         input: contentInput,
@@ -700,6 +1327,29 @@ function CenterPanel({ activeChannels, setActiveChannels, setActiveChannel, link
         tone,
         apiKeys,
         textModel: studioTextModel,
+        onStreamChannelText: useStreamUi
+          ? (ch, text) => {
+              setMessages((p) =>
+                p.map((m) =>
+                  m.id === aiStreamMsgId
+                    ? {
+                        ...m,
+                        bundle: {
+                          ...m.bundle,
+                          [ch]: {
+                            ...(m.bundle[ch] || {}),
+                            textVariants: [{ id: "v-0", label: "A", text }],
+                            selectedTextIdx: 0,
+                            visualSlots: m.bundle[ch]?.visualSlots ?? [],
+                            model: m.bundle[ch]?.model,
+                          },
+                        },
+                      }
+                    : m,
+                ),
+              );
+            }
+          : undefined,
       });
 
       for (const channelId of activeChannels) {
@@ -719,11 +1369,36 @@ function CenterPanel({ activeChannels, setActiveChannels, setActiveChannel, link
         }
       }
 
-      const aiMsg = { id: "msg-" + (Date.now() + 1), role: "assistant", channels: [...activeChannels], bundle, createdAt: new Date().toISOString(), time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) };
-      setMessages(p => [...p, aiMsg]);
-      if (onSelectPreview && activeChannels.length > 0) { const fc = activeChannels[0]; onSelectPreview({ channel: fc, text: bundle[fc]?.textVariants[0]?.text, visualSlots: bundle[fc]?.visualSlots }); }
+      if (useStreamUi && aiStreamMsgId) {
+        setMessages((p) =>
+          p.map((m) =>
+            m.id === aiStreamMsgId ? { ...m, bundle, streamLive: false } : m,
+          ),
+        );
+      } else {
+        const aiMsg = {
+          id: "msg-" + (Date.now() + 1),
+          role: "assistant",
+          channels: [...activeChannels],
+          bundle,
+          createdAt: new Date().toISOString(),
+          time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+        };
+        setMessages((p) => [...p, aiMsg]);
+      }
+      if (onSelectPreview && activeChannels.length > 0) {
+        const fc = activeChannels[0];
+        onSelectPreview({
+          channel: fc,
+          text: bundle[fc]?.textVariants[0]?.text,
+          visualSlots: bundle[fc]?.visualSlots,
+        });
+      }
       addToast(`Generated for ${activeChannels.length} channel${activeChannels.length > 1 ? "s" : ""}`, "success");
     } catch (error) {
+      if (aiStreamMsgId) {
+        setMessages((p) => p.filter((m) => m.id !== aiStreamMsgId));
+      }
       setMessages(p => [...p, { id: "msg-" + (Date.now() + 1), role: "error", content: error.message || "Generation failed. Check your API keys in Settings (gear icon in the top bar).", createdAt: new Date().toISOString(), time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) }]);
       addToast(error.message || "Generation failed", "error");
     } finally { setIsGenerating(false); setGenerationPhase(null); }
@@ -744,14 +1419,61 @@ function CenterPanel({ activeChannels, setActiveChannels, setActiveChannel, link
       </div>) : (<div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
         {messages.map(msg => (<div key={msg.id} style={{ display: "flex", flexDirection: "column", alignItems: msg.role === "user" ? "flex-end" : "flex-start", gap: 6 }}>
           {msg.role === "user" ? (<div style={{ maxWidth: "80%", padding: "14px 18px", borderRadius: 14, background: "linear-gradient(135deg,rgba(108,43,217,0.2),rgba(108,43,217,0.1))", border: "1px solid rgba(108,43,217,0.2)" }}>
-            <div style={{ display: "flex", gap: 6, marginBottom: 8, flexWrap: "wrap" }}><span style={{ fontSize: 10, fontWeight: 600, padding: "2px 8px", borderRadius: 4, background: "rgba(255,255,255,0.08)", color: "#8B8DA3", textTransform: "uppercase" }}>{msg.mode}</span><span style={{ fontSize: 10, fontWeight: 600, padding: "2px 8px", borderRadius: 4, background: "rgba(245,158,11,0.15)", color: "#FBBF24" }}>{msg.tone}</span>{msg.templateId && <span style={{ fontSize: 10, fontWeight: 600, padding: "2px 8px", borderRadius: 4, background: "rgba(108,43,217,0.15)", color: "#C4B5FD" }}>{TEMPLATES.find(t => t.id === msg.templateId)?.name || msg.templateId}</span>}<span style={{ fontSize: 10, fontWeight: 600, padding: "2px 8px", borderRadius: 4, background: "rgba(20,184,166,0.15)", color: "#5EEAD4" }}>{msg.numText}T · {msg.numVisual}V</span>{msg.channels?.includes("linkedin") && msg.linkedinIncludeCarousel === false && <span style={{ fontSize: 10, fontWeight: 600, padding: "2px 8px", borderRadius: 4, background: "rgba(10,102,194,0.2)", color: "#93C5FD" }}>LI · no carousel</span>}</div>
+            <div style={{ display: "flex", gap: 6, marginBottom: 8, flexWrap: "wrap" }}><span style={{ fontSize: 10, fontWeight: 600, padding: "2px 8px", borderRadius: 4, background: "rgba(255,255,255,0.08)", color: "#8B8DA3", textTransform: "uppercase" }}>{msg.mode}</span><span style={{ fontSize: 10, fontWeight: 600, padding: "2px 8px", borderRadius: 4, background: "rgba(245,158,11,0.15)", color: "#FBBF24" }}>{msg.tone}</span>{msg.templateId && <span style={{ fontSize: 10, fontWeight: 600, padding: "2px 8px", borderRadius: 4, background: "rgba(108,43,217,0.15)", color: "#C4B5FD" }}>{TEMPLATES.find(t => t.id === msg.templateId)?.name || msg.templateId}</span>}<span style={{ fontSize: 10, fontWeight: 600, padding: "2px 8px", borderRadius: 4, background: "rgba(20,184,166,0.15)", color: "#5EEAD4" }}>{msg.numText}T · {msg.numVisual}V</span>{msg.useBrandContext ? <span style={{ fontSize: 10, fontWeight: 600, padding: "2px 8px", borderRadius: 4, background: "rgba(147,51,234,0.2)", color: "#C4B5FD" }}>Brand context</span> : null}{msg.useNotionContext ? <span style={{ fontSize: 10, fontWeight: 600, padding: "2px 8px", borderRadius: 4, background: "rgba(99,102,241,0.2)", color: "#A5B4FC" }}>Notion refs</span> : null}{msg.channels?.includes("linkedin") && msg.linkedinIncludeCarousel === false && <span style={{ fontSize: 10, fontWeight: 600, padding: "2px 8px", borderRadius: 4, background: "rgba(10,102,194,0.2)", color: "#93C5FD" }}>LI · no carousel</span>}</div>
             <div style={{ fontSize: 14, color: "#E2E4EA", lineHeight: 1.6 }}>{msg.content}</div>
           </div>) : msg.role === "error" ? (<div style={{ maxWidth: "80%", padding: "14px 18px", borderRadius: 14, background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.2)" }}>
             <div style={{ fontSize: 13, color: "#FCA5A5", lineHeight: 1.6, display: "flex", alignItems: "flex-start", gap: 8 }}><StudioLucide name="AlertCircle" size={18} color="#FCA5A5" style={{ flexShrink: 0, marginTop: 2 }} /><span>{msg.content}</span></div>
           </div>) : (<div style={{ maxWidth: "95%", width: "100%" }}><GenerationCard bundle={msg.bundle} channels={msg.channels} onUpdateBundle={(updater) => handleBundleUpdate(msg.id, updater)} onCopy={handleCopy} onRegenerate={(chId) => onRegenerate(msg.id, chId)} onGenerateImage={(chId) => onGenerateImage?.(msg.id, chId)} onOpenDesigner={onOpenDesigner} isGenerating={isGenerating} activeBrand={activeBrand} designerPostSizeId={designerPostSizeId} designerWhiteBg={designerWhiteBg} designerHideLogo={designerHideLogo} /></div>)}
           <span style={{ fontSize: 10, color: "#52556B", padding: "0 4px" }}>{msg.time}</span>
         </div>))}
-        {isGenerating && (<div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 6 }}><div style={{ padding: "20px 24px", borderRadius: 14, background: "rgba(108,43,217,0.06)", border: "1px solid rgba(108,43,217,0.15)", width: "100%" }}><LoadingDots text={generationPhase === "url" ? "Fetching article" : generationPhase === "prepare" ? "Claude: channel-aware brief" : generationPhase === "text" ? loadingTextForTextPhase(activeChannels) : generationPhase === "images" ? "Generating images" : "Working"} /><div style={{ marginTop: 10, display: "flex", gap: 6 }}>{activeChannels.map(chId => { const c = CHANNELS.find(x => x.id === chId); return c ? <span key={chId} style={{ fontSize: 10, fontWeight: 600, padding: "3px 8px", borderRadius: 4, background: c.color + "15", color: c.color }}>{c.label}</span> : null; })}</div></div></div>)}
+        {isGenerating &&
+          !(messages.length > 0 && messages[messages.length - 1]?.streamLive) && (
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 6 }}>
+              <div
+                style={{
+                  padding: "20px 24px",
+                  borderRadius: 14,
+                  background: "rgba(108,43,217,0.06)",
+                  border: "1px solid rgba(108,43,217,0.15)",
+                  width: "100%",
+                }}
+              >
+                <LoadingDots
+                  text={
+                    generationPhase === "url"
+                      ? "Fetching article"
+                      : generationPhase === "prepare"
+                        ? "Claude: channel-aware brief"
+                        : generationPhase === "text"
+                          ? loadingTextForTextPhase(activeChannels)
+                          : generationPhase === "images"
+                            ? "Generating images"
+                            : "Working"
+                  }
+                />
+                <div style={{ marginTop: 10, display: "flex", gap: 6 }}>
+                  {activeChannels.map((chId) => {
+                    const c = CHANNELS.find((x) => x.id === chId);
+                    return c ? (
+                      <span
+                        key={chId}
+                        style={{
+                          fontSize: 10,
+                          fontWeight: 600,
+                          padding: "3px 8px",
+                          borderRadius: 4,
+                          background: c.color + "15",
+                          color: c.color,
+                        }}
+                      >
+                        {c.label}
+                      </span>
+                    ) : null;
+                  })}
+                </div>
+              </div>
+            </div>
+          )}
         <div ref={endRef} />
       </div>)}
     </div>
@@ -924,6 +1646,25 @@ function CenterPanel({ activeChannels, setActiveChannels, setActiveChannel, link
           </select>
           <div style={{ display: "flex", alignItems: "center", gap: 4, padding: "3px 4px", borderRadius: 7, background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.06)" }}><span style={{ fontSize: 10, color: "#6B7084", fontWeight: 600, padding: "0 4px" }}>Text</span>{[1, 2, 3, 4].map(n => (<button key={n} onClick={() => setNumText(n)} style={{ width: 22, height: 22, borderRadius: 5, border: "none", cursor: "pointer", fontSize: 10, fontWeight: 700, fontFamily: "inherit", background: numText === n ? "rgba(108,43,217,0.3)" : "transparent", color: numText === n ? "#C4B5FD" : "#52556B" }}>{n}</button>))}</div>
           <div style={{ display: "flex", alignItems: "center", gap: 4, padding: "3px 4px", borderRadius: 7, background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.06)" }} title="0 = text only, no image slots or auto-generation"><span style={{ fontSize: 10, color: "#6B7084", fontWeight: 600, padding: "0 2px 0 4px" }}>Visual</span>{[0, 1, 2, 3, 4].map(n => (<button key={n} type="button" onClick={() => setNumVisual(n)} style={{ minWidth: 22, height: 22, borderRadius: 5, border: "none", cursor: "pointer", fontSize: 10, fontWeight: 700, fontFamily: "inherit", background: numVisual === n ? "rgba(20,184,166,0.3)" : "transparent", color: numVisual === n ? "#5EEAD4" : "#52556B", padding: "0 4px" }}>{n}</button>))}</div>
+          <label style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 10, color: "#8B8DA3", fontWeight: 600, padding: "4px 8px", borderRadius: 7, border: "1px solid rgba(255,255,255,0.06)", background: "rgba(255,255,255,0.03)" }}>
+            <input
+              type="checkbox"
+              checked={useBrandContext}
+              onChange={(e) => setUseBrandContext(e.target.checked)}
+              style={{ width: 14, height: 14 }}
+            />
+            Use brand context
+          </label>
+          <label style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 10, color: "#8B8DA3", fontWeight: 600, padding: "4px 8px", borderRadius: 7, border: "1px solid rgba(255,255,255,0.06)", background: "rgba(255,255,255,0.03)", opacity: useBrandContext ? 1 : 0.55 }}>
+            <input
+              type="checkbox"
+              checked={useNotionContext}
+              disabled={!useBrandContext}
+              onChange={(e) => setUseNotionContext(e.target.checked)}
+              style={{ width: 14, height: 14 }}
+            />
+            Notion refs
+          </label>
           <div style={{ marginLeft: "auto", display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>{cfgModels.map(m => <span key={m.id} style={{ fontSize: 10, padding: "3px 8px", borderRadius: 5, background: m.color + "18", color: m.color, fontWeight: 600 }}>{m.name}</span>)}{cfgModels.length === 0 && <span style={{ fontSize: 10, padding: "3px 8px", borderRadius: 5, background: "rgba(239,68,68,0.12)", color: "#FCA5A5", fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 4 }}><StudioLucide name="Settings" size={12} color="#FCA5A5" /> No models</span>}</div>
         </div>
         {inputMode === "upload" && (
@@ -969,7 +1710,7 @@ function CenterPanel({ activeChannels, setActiveChannels, setActiveChannel, link
 }
 
 // ─── Right Panel ────────────────────────────────────────────────────────
-function RightPanel({ activeChannels, setActiveChannels, activeChannel, setActiveChannel, collapsed, previewData, addToast, activeBrand, onTextEdit, onOpenDesigner, designerPostSizeId = "1080x1080-trns", designerWhiteBg = true, designerHideLogo = false, width = 380, apiKeys = {}, tone = "Professional", selectedTemplateId = null, studioTextModel }) {
+function RightPanel({ activeChannels, setActiveChannels, activeChannel, setActiveChannel, collapsed, previewData, addToast, activeBrand, onTextEdit, onOpenDesigner, designerPostSizeId = "1080x1080-trns", designerWhiteBg = true, designerHideLogo = false, width = 380, apiKeys = {}, serverStatus = {}, tone = "Professional", selectedTemplateId = null, studioTextModel, setStudioTextModel, studioVideoModel, shortVideoKlingJob, onShortVideoKlingJob, isGenerating = false }) {
   if (collapsed) return null;
   const pd = previewData || {};
   const text = pd.text != null && pd.text !== "" ? pd.text : "Your generated content will appear here...";
@@ -977,8 +1718,13 @@ function RightPanel({ activeChannels, setActiveChannels, activeChannel, setActiv
   const [editing, setEditing] = useState(false); const [editText, setEditText] = useState(text); const [versionIdx, setVersionIdx] = useState(0); const [versions, setVersions] = useState([{ text, time: "now" }]);
   const [landingRevisePrompt, setLandingRevisePrompt] = useState("");
   const [landingReviseBusy, setLandingReviseBusy] = useState(false);
+  const [shortKlingDuration, setShortKlingDuration] = useState(10);
+  const [shortKlingAspect, setShortKlingAspect] = useState("9:16");
+  const [shortKlingBusy, setShortKlingBusy] = useState(false);
   const [htmlVideoOverlayOpen, setHtmlVideoOverlayOpen] = useState(false);
   const [htmlVideoOverlayScale, setHtmlVideoOverlayScale] = useState(1);
+  const [liveHtmlBlobUrl, setLiveHtmlBlobUrl] = useState("");
+  const lastLiveHtmlBlobRef = useRef({ sealed: "", url: "" });
   const htmlVideoOverlayWrapRef = useRef(null);
 
   useEffect(() => { setEditText(text); setVersions([{ text, time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) }]); setVersionIdx(0); setEditing(false); }, [text]);
@@ -1013,15 +1759,50 @@ function RightPanel({ activeChannels, setActiveChannels, activeChannel, setActiv
     return () => ro.disconnect();
   }, [htmlVideoOverlayOpen]);
 
+  const curText = versions[versionIdx]?.text || text;
+  const htmlVideoDoc = activeChannel === "html-video" ? extractHtmlVideoDocument(curText) : "";
+  const htmlVideoValid = /<!DOCTYPE\s+html/i.test(htmlVideoDoc) || /<html[\s>]/i.test(htmlVideoDoc);
+  const htmlVideoLive = hasIframeHtmlStart(htmlVideoDoc);
+  const htmlVideoIframeSrc = htmlVideoLive ? sealPartialHtmlForIframe(htmlVideoDoc) : "";
+  const landingDocRaw = activeChannel === "landing" ? extractLandingPageDocument(curText) : "";
+  const landingLive = activeChannel === "landing" && hasIframeHtmlStart(landingDocRaw);
+  const landingIframeSrc = landingLive ? sealPartialHtmlForIframe(landingDocRaw) : "";
+
+  /** Sealed HTML for blob preview (html-video + landing). */
+  const liveHtmlForBlob =
+    activeChannel === "html-video" && htmlVideoLive
+      ? htmlVideoIframeSrc
+      : activeChannel === "landing" && landingLive
+        ? landingIframeSrc
+        : "";
+
+  useLayoutEffect(() => {
+    if (!liveHtmlForBlob) {
+      setLiveHtmlBlobUrl("");
+      lastLiveHtmlBlobRef.current = { sealed: "", url: "" };
+      return;
+    }
+    const blob = new Blob([injectPreviewBaseHref(liveHtmlForBlob)], { type: "text/html;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    lastLiveHtmlBlobRef.current = { sealed: liveHtmlForBlob, url };
+    setLiveHtmlBlobUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [liveHtmlForBlob]);
+
+  const safeLiveHtmlBlobUrl =
+    liveHtmlBlobUrl && lastLiveHtmlBlobRef.current.sealed === liveHtmlForBlob ? liveHtmlBlobUrl : undefined;
+
   const saveEdit = () => {
     const newVer = { text: editText, time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) };
     setVersions(p => [...p, newVer]); setVersionIdx(versions.length); setEditing(false);
     onTextEdit?.(editText);
   };
   const revertTo = (idx) => { setVersionIdx(idx); setEditText(versions[idx].text); };
-  const curText = versions[versionIdx]?.text || text;
-  const htmlVideoDoc = activeChannel === "html-video" ? extractHtmlVideoDocument(curText) : "";
-  const htmlVideoValid = /<!DOCTYPE\s+html/i.test(htmlVideoDoc) || /<html[\s>]/i.test(htmlVideoDoc);
+
+  const landingStreamInProgress =
+    activeChannel === "landing" && isGenerating && landingLive && !/<\/html>/i.test(landingDocRaw);
+  const htmlVideoStreamInProgress =
+    activeChannel === "html-video" && isGenerating && htmlVideoLive && !/<\/html>/i.test(htmlVideoDoc);
   const hasLandingSource =
     activeChannel === "landing" &&
     isFullLandingHtml(curText) &&
@@ -1193,7 +1974,8 @@ function RightPanel({ activeChannels, setActiveChannels, activeChannel, setActiv
                   }}
                 >
                   <iframe
-                    srcDoc={htmlVideoDoc}
+                    src={htmlVideoLive && safeLiveHtmlBlobUrl ? safeLiveHtmlBlobUrl : undefined}
+                    srcDoc={htmlVideoLive && safeLiveHtmlBlobUrl ? undefined : htmlVideoLive ? htmlVideoIframeSrc : htmlVideoDoc}
                     sandbox="allow-scripts allow-same-origin"
                     title="HTML Video expanded"
                     style={{
@@ -1292,14 +2074,233 @@ function RightPanel({ activeChannels, setActiveChannels, activeChannel, setActiv
           <div style={{ display: "flex", gap: 16, marginTop: 16, paddingTop: 12, borderTop: "1px solid rgba(255,255,255,0.06)", alignItems: "center", flexWrap: "wrap" }}>{[{ label: "Like", lucide: "ThumbsUp" }, { label: "Comment", lucide: "MessageCircle" }, { label: "Repost", lucide: "Repeat2" }, { label: "Send", lucide: "Send" }].map(({ label, lucide }) => (<span key={label} style={{ fontSize: 12, color: "#52556B", display: "inline-flex", alignItems: "center", gap: 5 }}><StudioLucide name={lucide} size={14} color="#52556B" />{label}</span>))}</div>
         </div>}
         {activeChannel === "twitter" && <div style={{ padding: 16 }}><div style={{ display: "flex", gap: 12 }}><div style={{ width: 40, height: 40, borderRadius: "50%", background: "linear-gradient(135deg,#6C2BD9,#14B8A6)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, fontWeight: 700, color: "white", flexShrink: 0 }}>P</div><div style={{ flex: 1 }}><div style={{ display: "flex", gap: 6, alignItems: "center" }}><span style={{ fontSize: 14, fontWeight: 700, color: "#E2E4EA" }}>Prashanth</span><span style={{ fontSize: 13, color: "#52556B" }}>@prashanth_ai · now</span></div>{editing ? <textarea value={editText} onChange={e => setEditText(e.target.value)} style={{ width: "100%", minHeight: 80, padding: 8, borderRadius: 8, border: "1px solid rgba(29,155,240,0.3)", background: "rgba(29,155,240,0.05)", color: "#E2E4EA", fontSize: 14, fontFamily: "'DM Sans',sans-serif", lineHeight: 1.6, outline: "none", resize: "vertical", marginTop: 6, boxSizing: "border-box" }} /> : <div onClick={() => setEditing(true)} style={{ fontSize: 14, color: "#C4C6D0", lineHeight: 1.6, marginTop: 6, cursor: "text" }}>{curText.slice(0, 280)}</div>}{cc(curText) > 280 && <div style={{ fontSize: 11, color: "#FCA5A5", marginTop: 4, fontWeight: 600 }}>{cc(curText)}/280 — over limit</div>}</div></div></div>}
+        {activeChannel === "short-video" && (
+          <div style={{ padding: 16 }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
+              <h2 style={{ fontSize: 16, fontWeight: 700, color: "#E2E4EA", margin: 0, ...(brandHFont ? { fontFamily: `'${brandHFont}', sans-serif` } : {}) }}>Short Video (Kling)</h2>
+              <button type="button" onClick={() => setEditing(!editing)} style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid rgba(255,255,255,0.08)", background: editing ? "rgba(255,107,107,0.15)" : "rgba(255,255,255,0.03)", color: editing ? "#FCA5A5" : "#8B8DA3", fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>{editing ? "Preview" : "Edit prompt"}</button>
+            </div>
+            <p style={{ margin: "0 0 14px", fontSize: 11, color: "#8B8DA3", lineHeight: 1.55 }}>
+              Claude wrote a <strong style={{ fontWeight: 600, color: "#E2E4EA" }}>text-to-video prompt</strong> from your brief. Requests go to <strong style={{ fontWeight: 600, color: "#E2E4EA" }}>Kie AI</strong> (Kling) with your brand. Add your <strong style={{ fontWeight: 600, color: "#E2E4EA" }}>Kie AI API key</strong> under the gear icon.
+            </p>
+            {shortVideoKlingJob?.jobId && (
+              <div style={{ marginBottom: 14, padding: 12, borderRadius: 10, border: "1px solid rgba(255,107,107,0.25)", background: "rgba(255,107,107,0.06)" }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: "#FCA5A5", marginBottom: 6 }}>Last Kling response</div>
+                <div style={{ fontSize: 11, color: "#C4C6D0", fontFamily: "'JetBrains Mono',monospace", wordBreak: "break-all" }}>Job ID: {shortVideoKlingJob.jobId}</div>
+                {shortVideoKlingJob.message && <div style={{ fontSize: 11, color: "#8B8DA3", marginTop: 6 }}>{shortVideoKlingJob.message}</div>}
+                {shortVideoKlingJob.estimatedDuration != null &&
+                  !(shortVideoKlingJob.videoUrls?.length > 0) &&
+                  shortVideoKlingJob.kieState !== "fail" && (
+                  <div style={{ fontSize: 10, color: "#52556B", marginTop: 4 }}>Est. wait ~{shortVideoKlingJob.estimatedDuration}s (provider-dependent)</div>
+                )}
+                {shortVideoKlingJob.kieState &&
+                  shortVideoKlingJob.kieState !== "success" &&
+                  shortVideoKlingJob.kieState !== "fail" && (
+                    <div style={{ fontSize: 11, color: "#A5B4FC", marginTop: 8, display: "flex", alignItems: "center", gap: 8 }}>
+                      <StudioLucide name="Loader2" size={14} color="#A5B4FC" />
+                      Kie AI: {shortVideoKlingJob.kieState}…
+                    </div>
+                  )}
+                {shortVideoKlingJob.kieState === "fail" && (shortVideoKlingJob.failMsg || shortVideoKlingJob.failCode) && (
+                  <div style={{ fontSize: 11, color: "#FCA5A5", marginTop: 8 }}>
+                    {shortVideoKlingJob.failMsg || shortVideoKlingJob.failCode}
+                  </div>
+                )}
+                {shortVideoKlingJob.lastPollError && shortVideoKlingJob.kieState !== "fail" && (
+                  <div style={{ fontSize: 10, color: "#FBBF24", marginTop: 6 }}>Status check: {shortVideoKlingJob.lastPollError}</div>
+                )}
+                {shortVideoKlingJob.pollError && (
+                  <div style={{ fontSize: 10, color: "#FBBF24", marginTop: 6 }}>{shortVideoKlingJob.pollError}</div>
+                )}
+                {shortVideoKlingJob.videoUrls?.length > 0 && (
+                  <div style={{ marginTop: 12 }}>
+                    <video
+                      controls
+                      playsInline
+                      src={shortVideoKlingJob.videoUrls[0]}
+                      style={{
+                        width: "100%",
+                        maxHeight: 320,
+                        borderRadius: 10,
+                        background: "#000",
+                      }}
+                    />
+                    <a
+                      href={shortVideoKlingJob.videoUrls[0]}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      style={{ display: "inline-block", marginTop: 8, fontSize: 11, fontWeight: 600, color: "#A5B4FC" }}
+                    >
+                      Open video URL
+                    </a>
+                  </div>
+                )}
+              </div>
+            )}
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginBottom: 14, alignItems: "center" }}>
+              <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 11, color: "#8B8DA3", fontWeight: 600 }}>
+                Duration
+                <select value={shortKlingDuration} onChange={(e) => setShortKlingDuration(Number(e.target.value))} style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid rgba(255,255,255,0.1)", background: "#1A1B23", color: "#E2E4EA", fontSize: 11, fontFamily: "inherit" }}>
+                  {[5, 10].map((d) => (
+                    <option key={d} value={d}>
+                      {d}s
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 11, color: "#8B8DA3", fontWeight: 600 }}>
+                Aspect
+                <select value={shortKlingAspect} onChange={(e) => setShortKlingAspect(e.target.value)} style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid rgba(255,255,255,0.1)", background: "#1A1B23", color: "#E2E4EA", fontSize: 11, fontFamily: "inherit" }}>
+                  <option value="16:9">16:9</option>
+                  <option value="9:16">9:16 (vertical)</option>
+                  <option value="1:1">1:1</option>
+                </select>
+              </label>
+            </div>
+            <button
+              type="button"
+              disabled={
+                shortKlingBusy ||
+                !curText.trim() ||
+                /^Your generated content will appear here/i.test(curText.trim()) ||
+                (!String(apiKeys?.kling_key || "").trim() && !serverStatus?.kling)
+              }
+              onClick={async () => {
+                const prompt = curText.trim();
+                if (!prompt || shortKlingBusy) return;
+                setShortKlingBusy(true);
+                try {
+                  const result = await generateVideo({
+                    prompt,
+                    duration: shortKlingDuration,
+                    aspectRatio: shortKlingAspect,
+                    brand: activeBrand,
+                    apiKeys,
+                    videoModel: studioVideoModel,
+                  });
+                  onShortVideoKlingJob?.(result);
+                } catch (err) {
+                  addToast(err?.message || "Kling request failed", "error");
+                } finally {
+                  setShortKlingBusy(false);
+                }
+              }}
+              style={{
+                padding: "10px 16px",
+                borderRadius: 9,
+                border: "none",
+                background:
+                  shortKlingBusy || !curText.trim()
+                    ? "rgba(255,255,255,0.06)"
+                    : "linear-gradient(135deg,#FF6B6B,#E11D48)",
+                color: shortKlingBusy || !curText.trim() ? "#52556B" : "white",
+                fontSize: 12,
+                fontWeight: 700,
+                cursor: shortKlingBusy || !curText.trim() ? "default" : "pointer",
+                fontFamily: "inherit",
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 8,
+                marginBottom: 14,
+              }}
+            >
+              {shortKlingBusy ? (
+                <>
+                  <StudioLucide name="Loader2" size={16} color="#52556B" />
+                  Sending to Kling…
+                </>
+              ) : (
+                <>
+                  <StudioLucide name="Zap" size={16} color="white" />
+                  Generate short video (Kling)
+                </>
+              )}
+            </button>
+            {!apiKeys?.kling_key?.trim() && !serverStatus?.kling && (
+              <div style={{ fontSize: 10, color: "#FBBF24", marginBottom: 12, lineHeight: 1.45 }}>Add your Kie AI API key in Settings (video field) to enable Kling generation.</div>
+            )}
+            {editing ? (
+              <textarea
+                value={editText}
+                onChange={(e) => setEditText(e.target.value)}
+                style={{
+                  width: "100%",
+                  minHeight: 220,
+                  padding: 12,
+                  borderRadius: 10,
+                  border: "1px solid rgba(255,107,107,0.35)",
+                  background: "rgba(255,107,107,0.06)",
+                  color: "#E2E4EA",
+                  fontSize: 12,
+                  fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
+                  lineHeight: 1.6,
+                  outline: "none",
+                  resize: "vertical",
+                  boxSizing: "border-box",
+                }}
+              />
+            ) : (
+              <div
+                onClick={() => setEditing(true)}
+                style={{
+                  fontSize: 12,
+                  color: "#C4C6D0",
+                  lineHeight: 1.65,
+                  cursor: "text",
+                  whiteSpace: "pre-wrap",
+                  padding: 12,
+                  borderRadius: 10,
+                  border: "1px solid rgba(255,255,255,0.06)",
+                  background: "rgba(0,0,0,0.2)",
+                  maxHeight: 360,
+                  overflowY: "auto",
+                }}
+              >
+                {curText}
+              </div>
+            )}
+            {editing && (
+              <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+                <button type="button" onClick={saveEdit} style={{ padding: "6px 14px", borderRadius: 7, border: "none", background: "linear-gradient(135deg,#FF6B6B,#E11D48)", color: "white", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
+                  Save
+                </button>
+                <button type="button" onClick={() => { setEditing(false); setEditText(versions[versionIdx].text); }} style={{ padding: "6px 14px", borderRadius: 7, border: "1px solid rgba(255,255,255,0.08)", background: "transparent", color: "#8B8DA3", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
+                  Cancel
+                </button>
+              </div>
+            )}
+          </div>
+        )}
         {activeChannel === "landing" && <div style={{ padding: 16 }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
             <h2 style={{ fontSize: 16, fontWeight: 700, color: "#E2E4EA", margin: 0, ...(brandHFont ? { fontFamily: `'${brandHFont}', sans-serif` } : {}) }}>Landing Page Preview</h2>
             <div style={{ display: "flex", gap: 6 }}>
               <button onClick={() => setEditing(!editing)} style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid rgba(255,255,255,0.08)", background: editing ? "rgba(236,72,153,0.15)" : "rgba(255,255,255,0.03)", color: editing ? "#EC4899" : "#8B8DA3", fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>{editing ? "Preview" : "Edit Source"}</button>
-              <button onClick={() => { const html = extractLandingPageDocument(curText); const blob = new Blob([html], { type: "text/html" }); const url = URL.createObjectURL(blob); window.open(url, "_blank"); setTimeout(() => URL.revokeObjectURL(url), 60000); }} style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid rgba(236,72,153,0.3)", background: "rgba(236,72,153,0.1)", color: "#EC4899", fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>Open Full</button>
+              <button onClick={() => { const html = injectPreviewBaseHref(extractLandingPageDocument(curText)); const blob = new Blob([html], { type: "text/html" }); const url = URL.createObjectURL(blob); window.open(url, "_blank"); setTimeout(() => URL.revokeObjectURL(url), 60000); }} style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid rgba(236,72,153,0.3)", background: "rgba(236,72,153,0.1)", color: "#EC4899", fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>Open Full</button>
             </div>
           </div>
+          {typeof setStudioTextModel === "function" && (
+            <label style={{ display: "block", marginBottom: 12 }}>
+              <span style={{ display: "block", fontSize: 11, fontWeight: 600, color: "#8B8DA3", marginBottom: 6 }}>
+                Claude model
+              </span>
+              <span style={{ display: "block", fontSize: 10, color: "#52556B", marginBottom: 8, lineHeight: 1.45 }}>
+                Used for new landing generations and “Edit with AI” below. Same setting as header Models → Content (Claude).
+              </span>
+              <select
+                value={studioTextModel}
+                disabled={landingReviseBusy}
+                onChange={(e) => setStudioTextModel(normalizeStudioTextModel(e.target.value))}
+                style={STUDIO_MODEL_SELECT_STYLE}
+              >
+                {STUDIO_TEXT_MODEL_OPTIONS.map((o) => (
+                  <option key={o.id} value={o.id}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
           {hasLandingSource && (
             <div style={{ marginBottom: 12, padding: 12, borderRadius: 10, border: "1px solid rgba(236,72,153,0.2)", background: "rgba(236,72,153,0.04)" }}>
               <div style={{ fontSize: 11, fontWeight: 600, color: "#F9A8D4", marginBottom: 8, display: "flex", alignItems: "center", gap: 6 }}>
@@ -1369,11 +2370,37 @@ function RightPanel({ activeChannels, setActiveChannels, activeChannel, setActiv
           )}
           {editing ? <textarea value={editText} onChange={e => setEditText(e.target.value)} style={{ width: "100%", minHeight: 300, padding: 12, borderRadius: 10, border: "1px solid rgba(236,72,153,0.3)", background: "rgba(236,72,153,0.03)", color: "#E2E4EA", fontSize: 12, fontFamily: "'JetBrains Mono', 'Fira Code', monospace", lineHeight: 1.6, outline: "none", resize: "vertical", boxSizing: "border-box", tabSize: 2 }} /> :
           <div style={{ borderRadius: 10, overflow: "auto", border: "1px solid rgba(255,255,255,0.08)", background: "#0C0D14", height: 600, position: "relative" }}>
+            {landingStreamInProgress && (
+              <div
+                style={{
+                  position: "absolute",
+                  top: 8,
+                  right: 8,
+                  zIndex: 2,
+                  padding: "4px 10px",
+                  borderRadius: 8,
+                  fontSize: 10,
+                  fontWeight: 700,
+                  color: "#F9A8D4",
+                  background: "rgba(0,0,0,0.65)",
+                  border: "1px solid rgba(236,72,153,0.35)",
+                  pointerEvents: "none",
+                }}
+              >
+                Live preview · streaming
+              </div>
+            )}
             <iframe
+              key="studio-landing-preview"
+              src={activeChannel === "landing" && landingLive && safeLiveHtmlBlobUrl ? safeLiveHtmlBlobUrl : undefined}
               srcDoc={
-                hasLandingSource
-                  ? extractLandingPageDocument(curText)
-                  : "<!DOCTYPE html><html><head><meta charset='utf-8'><style>body{font-family:system-ui;margin:40px;color:#888;background:#0C0D14}</style></head><body><p>Generate a landing page to preview. The model returns a full HTML document.</p></body></html>"
+                activeChannel === "landing" && landingLive && safeLiveHtmlBlobUrl
+                  ? undefined
+                  : landingLive
+                    ? landingIframeSrc
+                    : isGenerating
+                      ? "<!DOCTYPE html><html><head><meta charset='utf-8'><style>body{font-family:system-ui;margin:40px;color:#A78BFA;background:#0C0D14;line-height:1.65}</style></head><body><p>Waiting for HTML… the preview fills in as soon as the model outputs <code style=\"color:#F9A8D4\">&lt;!DOCTYPE html&gt;</code> or <code style=\"color:#F9A8D4\">&lt;html&gt;</code>.</p></body></html>"
+                      : "<!DOCTYPE html><html><head><meta charset='utf-8'><style>body{font-family:system-ui;margin:40px;color:#888;background:#0C0D14}</style></head><body><p>Generate a landing page to preview. The model returns a full HTML document.</p></body></html>"
               }
               sandbox="allow-scripts allow-same-origin"
               style={{ width: "200%", height: 3000, border: "none", transform: "scale(0.5)", transformOrigin: "top left", display: "block", pointerEvents: "auto" }}
@@ -1410,18 +2437,58 @@ function RightPanel({ activeChannels, setActiveChannels, activeChannel, setActiv
                 <StudioLucide name="Maximize2" size={12} color={!htmlVideoValid || editing ? "#52556B" : "#C4B5FD"} />
                 Expand
               </button>
-              <button type="button" onClick={() => { const html = extractHtmlVideoDocument(curText); const blob = new Blob([html], { type: "text/html" }); const url = URL.createObjectURL(blob); window.open(url, "_blank"); setTimeout(() => URL.revokeObjectURL(url), 60000); }} style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid rgba(168,85,247,0.35)", background: "rgba(168,85,247,0.12)", color: "#C4B5FD", fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>Open Full</button>
+              <button type="button" onClick={() => { const html = injectPreviewBaseHref(extractHtmlVideoDocument(curText)); const blob = new Blob([html], { type: "text/html" }); const url = URL.createObjectURL(blob); window.open(url, "_blank"); setTimeout(() => URL.revokeObjectURL(url), 60000); }} style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid rgba(168,85,247,0.35)", background: "rgba(168,85,247,0.12)", color: "#C4B5FD", fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>Open Full</button>
             </div>
           </div>
           <p style={{ margin: "0 0 12px", fontSize: 11, color: "#8B8DA3", lineHeight: 1.55 }}>1280×720 scene sequencer — in the preview use arrow keys or Space to step scenes, <span style={{ fontFamily: "monospace", color: "#A855F7" }}>a</span> to resume autoplay.</p>
-          {!editing && !htmlVideoValid && (
+          {!editing && !htmlVideoLive && !isGenerating && (
             <div style={{ marginBottom: 12, padding: "10px 12px", borderRadius: 8, background: "rgba(168,85,247,0.08)", border: "1px solid rgba(168,85,247,0.25)", fontSize: 11, color: "#C4B5FD", lineHeight: 1.5 }}>
               No HTML video document yet for this project. Include <strong style={{ fontWeight: 600 }}>HTML Video</strong> in your channel list and run <strong style={{ fontWeight: 600 }}>Generate</strong>, or use <strong style={{ fontWeight: 600 }}>Edit Source</strong> to paste a full HTML file.
             </div>
           )}
+          {!editing && !htmlVideoLive && isGenerating && (
+            <div style={{ marginBottom: 12, padding: "10px 12px", borderRadius: 8, background: "rgba(168,85,247,0.08)", border: "1px solid rgba(168,85,247,0.25)", fontSize: 11, color: "#C4B5FD", lineHeight: 1.5 }}>
+              Streaming… the preview appears as soon as the document starts with <code style={{ fontFamily: "monospace", color: "#E9D5FF" }}>&lt;!DOCTYPE html&gt;</code> or <code style={{ fontFamily: "monospace", color: "#E9D5FF" }}>&lt;html&gt;</code>.
+            </div>
+          )}
           {editing ? <textarea value={editText} onChange={(e) => setEditText(e.target.value)} style={{ width: "100%", minHeight: 300, padding: 12, borderRadius: 10, border: "1px solid rgba(168,85,247,0.35)", background: "rgba(168,85,247,0.06)", color: "#E2E4EA", fontSize: 12, fontFamily: "'JetBrains Mono', 'Fira Code', monospace", lineHeight: 1.6, outline: "none", resize: "vertical", boxSizing: "border-box", tabSize: 2 }} /> : (
             <div style={{ borderRadius: 10, overflow: "auto", border: "1px solid rgba(255,255,255,0.08)", background: "#000", height: 600, position: "relative" }}>
-              <iframe srcDoc={htmlVideoDoc} sandbox="allow-scripts allow-same-origin" style={{ width: "200%", height: 2200, border: "none", transform: "scale(0.5)", transformOrigin: "top left", display: "block", pointerEvents: "auto" }} title="HTML Video Preview" />
+              {htmlVideoStreamInProgress && (
+                <div
+                  style={{
+                    position: "absolute",
+                    top: 8,
+                    right: 8,
+                    zIndex: 2,
+                    padding: "4px 10px",
+                    borderRadius: 8,
+                    fontSize: 10,
+                    fontWeight: 700,
+                    color: "#C4B5FD",
+                    background: "rgba(0,0,0,0.65)",
+                    border: "1px solid rgba(168,85,247,0.35)",
+                    pointerEvents: "none",
+                  }}
+                >
+                  Live preview · streaming
+                </div>
+              )}
+              <iframe
+                key="studio-html-video-preview"
+                src={activeChannel === "html-video" && htmlVideoLive && safeLiveHtmlBlobUrl ? safeLiveHtmlBlobUrl : undefined}
+                srcDoc={
+                  activeChannel === "html-video" && htmlVideoLive && safeLiveHtmlBlobUrl
+                    ? undefined
+                    : htmlVideoLive
+                      ? htmlVideoIframeSrc
+                      : isGenerating
+                        ? "<!DOCTYPE html><html><head><meta charset='utf-8'><style>body{font-family:system-ui;margin:40px;color:#A78BFA;background:#000;line-height:1.65}</style></head><body><p>Waiting for HTML…</p></body></html>"
+                        : htmlVideoDoc || "<!DOCTYPE html><html><head><meta charset='utf-8'><style>body{font-family:system-ui;margin:40px;color:#52556B;background:#000}</style></head><body><p>No preview</p></body></html>"
+                }
+                sandbox="allow-scripts allow-same-origin"
+                style={{ width: "200%", height: 2200, border: "none", transform: "scale(0.5)", transformOrigin: "top left", display: "block", pointerEvents: "auto" }}
+                title="HTML Video Preview"
+              />
             </div>
           )}
           {editing && <div style={{ display: "flex", gap: 6, marginTop: 8 }}><button type="button" onClick={saveEdit} style={{ padding: "6px 14px", borderRadius: 7, border: "none", background: "linear-gradient(135deg,#A855F7,#6C2BD9)", color: "white", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>Save Changes</button><button type="button" onClick={() => { setEditing(false); setEditText(versions[versionIdx].text); }} style={{ padding: "6px 14px", borderRadius: 7, border: "1px solid rgba(255,255,255,0.08)", background: "transparent", color: "#8B8DA3", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>Cancel</button></div>}
@@ -1441,7 +2508,7 @@ function RightPanel({ activeChannels, setActiveChannels, activeChannel, setActiv
           <button type="button" onClick={() => setEditing(true)} style={{ padding: "6px 12px", borderRadius: 7, border: "1px solid rgba(255,255,255,0.06)", background: "rgba(255,255,255,0.03)", color: "#8B8DA3", fontSize: 12, fontWeight: 500, cursor: "pointer", fontFamily: "inherit", display: "inline-flex", alignItems: "center", gap: 6 }}><StudioLucide name="Pencil" size={14} color="#8B8DA3" /> Edit</button>
           {slots.some((s) => getVisualSelectedIndices(s).some((ix) => s.variants?.[ix]?.url)) && <button type="button" onClick={() => { for (const s of slots) { const idxs = getVisualSelectedIndices(s); const hit = idxs.find((ix) => s.variants?.[ix]?.url); if (hit != null) { const v = s.variants[hit]; onOpenDesigner?.(v.url, v.designerContent, slots); break; } } }} style={{ padding: "6px 12px", borderRadius: 7, border: "1px solid rgba(108,43,217,0.35)", background: "rgba(108,43,217,0.08)", color: "#C4B5FD", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", display: "inline-flex", alignItems: "center", gap: 6 }}><StudioLucide name="Palette" size={14} color="#C4B5FD" /> Visual designer</button>}
           <button type="button" onClick={() => { clipCopy(curText).then(ok => addToast(ok ? "Copied!" : "Copy failed", ok ? "success" : "error")); }} style={{ padding: "6px 12px", borderRadius: 7, border: "1px solid rgba(255,255,255,0.06)", background: "rgba(255,255,255,0.03)", color: "#8B8DA3", fontSize: 12, fontWeight: 500, cursor: "pointer", fontFamily: "inherit", display: "inline-flex", alignItems: "center", gap: 6 }}><StudioLucide name="Copy" size={14} color="#8B8DA3" /> Copy</button>
-          <button type="button" onClick={() => { if (activeChannel === "html-video") { downloadFile(extractHtmlVideoDocument(curText), `${activeBrand?.company_name || "HTML-Video"}.html`, "text/html"); addToast("Downloaded HTML video", "success"); } else if (activeChannel === "landing") { downloadFile(extractLandingPageDocument(curText), `${activeBrand?.company_name || "Landing-Page"}.html`, "text/html"); addToast("Downloaded landing HTML", "success"); } else { downloadFile(curText, `${activeChannel}-content.md`, "text/markdown"); addToast("Downloaded!", "success"); } }} style={{ padding: "6px 12px", borderRadius: 7, border: "1px solid rgba(255,255,255,0.06)", background: "rgba(255,255,255,0.03)", color: "#8B8DA3", fontSize: 12, fontWeight: 500, cursor: "pointer", fontFamily: "inherit", display: "inline-flex", alignItems: "center", gap: 6 }}><StudioLucide name="Download" size={14} color="#8B8DA3" /> {activeChannel === "html-video" || activeChannel === "landing" ? "Download .html" : "Download"}</button>
+          <button type="button" onClick={() => { if (activeChannel === "html-video") { downloadFile(extractHtmlVideoDocument(curText), `${activeBrand?.company_name || "HTML-Video"}.html`, "text/html"); addToast("Downloaded HTML video", "success"); } else if (activeChannel === "landing") { downloadFile(extractLandingPageDocument(curText), `${activeBrand?.company_name || "Landing-Page"}.html`, "text/html"); addToast("Downloaded landing HTML", "success"); } else if (activeChannel === "short-video") { downloadFile(curText, `${activeBrand?.company_name || "Short-Video"}-kling-prompt.txt`, "text/plain"); addToast("Downloaded Kling prompt", "success"); } else { downloadFile(curText, `${activeChannel}-content.md`, "text/markdown"); addToast("Downloaded!", "success"); } }} style={{ padding: "6px 12px", borderRadius: 7, border: "1px solid rgba(255,255,255,0.06)", background: "rgba(255,255,255,0.03)", color: "#8B8DA3", fontSize: 12, fontWeight: 500, cursor: "pointer", fontFamily: "inherit", display: "inline-flex", alignItems: "center", gap: 6 }}><StudioLucide name="Download" size={14} color="#8B8DA3" /> {activeChannel === "html-video" || activeChannel === "landing" ? "Download .html" : activeChannel === "short-video" ? "Download .txt" : "Download"}</button>
         </div>
       </div>
 
@@ -1498,6 +2565,10 @@ export default function Workspace({ user, onLogout }) {
   const [studioImageModel, setStudioImageModel] = useState(() =>
     normalizeStudioImageModel(loadStudioModelPrefs()?.imageModel)
   );
+  const [studioImageProvider, setStudioImageProvider] = useState(() => {
+    const p = loadStudioModelPrefs()?.imageProvider;
+    return isStudioImageProviderId(p) ? p : DEFAULT_STUDIO_IMAGE_PROVIDER;
+  });
   const [studioVideoModel, setStudioVideoModel] = useState(() =>
     normalizeStudioVideoModel(loadStudioModelPrefs()?.videoModel)
   );
@@ -1527,7 +2598,13 @@ export default function Workspace({ user, onLogout }) {
     if (!list.length) return;
     const idx = options.length > 0 ? activeIndex : 0;
     const cur = list[idx];
-    primeDesignerEmbed(cur.url, cur.designerContent ?? designerContent ?? null, designerLayoutForEmbed(), activeBrand || null);
+    primeDesignerEmbed(
+      cur.url,
+      cur.designerContent ?? designerContent ?? null,
+      designerLayoutForEmbed(),
+      activeBrand || null,
+      String(apiKeys?.anthropic_key || "").trim() || null,
+    );
     setDesignerOverlay({
       open: true,
       embedKey: Date.now(),
@@ -1631,13 +2708,30 @@ export default function Workspace({ user, onLogout }) {
   useEffect(() => { try { localStorage.setItem("ce_active_brand", activeBrandId); } catch {} }, [activeBrandId]);
   useEffect(() => { if (activeProjectId) try { localStorage.setItem("ce_active_project", activeProjectId); } catch {} }, [activeProjectId]);
 
+  const geminiImageConfigured = useMemo(
+    () =>
+      !!(
+        String(apiKeys.gemini_key || "")
+          .replace(/[^\x20-\x7E]/g, "")
+          .trim() || serverStatus.gemini
+      ),
+    [apiKeys.gemini_key, serverStatus.gemini]
+  );
+
+  useEffect(() => {
+    if (studioImageProvider === STUDIO_IMAGE_PROVIDER_GEMINI && !geminiImageConfigured) {
+      setStudioImageProvider(STUDIO_IMAGE_PROVIDER_OPENAI);
+    }
+  }, [geminiImageConfigured, studioImageProvider]);
+
   useEffect(() => {
     saveStudioModelPrefs({
       textModel: studioTextModel,
       imageModel: studioImageModel,
       videoModel: studioVideoModel,
+      imageProvider: studioImageProvider,
     });
-  }, [studioTextModel, studioImageModel, studioVideoModel]);
+  }, [studioTextModel, studioImageModel, studioVideoModel, studioImageProvider]);
 
   useEffect(() => {
     if (!activeProjectId || isGenerating) return;
@@ -1822,18 +2916,68 @@ export default function Workspace({ user, onLogout }) {
       const sourceText = userMsg.preparedInput || userMsg.content;
       const requestedNv = userMsg.numText || 3;
       const numVariants =
-        channelId === "landing" || channelId === "html-video" ? 1 : requestedNv;
-      const result = await generateText({
-        input: sourceText,
-        channel: channelId,
-        templateId: userMsg.templateId || selectedTemplateId,
-        brand: activeBrand,
-        numVariants,
-        tone: userMsg.tone || tone,
-        apiKeys,
-        textModel: studioTextModel,
-      });
-      setCurrentMessages(p => p.map(m => { if (m.id !== messageId) return m; const bundle = { ...m.bundle }; bundle[channelId] = { ...bundle[channelId], textVariants: result.variants, selectedTextIdx: 0 }; return { ...m, bundle }; }));
+        channelId === "landing" || channelId === "html-video" || channelId === "short-video"
+          ? 1
+          : requestedNv;
+      const streamRegen = channelId === "landing" || channelId === "html-video";
+      let result;
+      if (streamRegen) {
+        const response = await generateText({
+          input: sourceText,
+          channel: channelId,
+          templateId: userMsg.templateId || selectedTemplateId,
+          brand: activeBrand,
+          numVariants,
+          tone: userMsg.tone || tone,
+          apiKeys,
+          textModel: studioTextModel,
+          stream: true,
+        });
+        if (!response.ok) {
+          const err = await response.json().catch(() => ({}));
+          throw new Error(err.error || "Text generation failed");
+        }
+        let acc = "";
+        let streamErr = null;
+        await consumeTextStream(response, {
+          onChunk: (t) => {
+            acc += t;
+            setCurrentMessages((p) =>
+              p.map((m) => {
+                if (m.id !== messageId) return m;
+                const bundle = { ...m.bundle };
+                const chb = bundle[channelId] || {};
+                bundle[channelId] = {
+                  ...chb,
+                  textVariants: [{ id: "v-0", label: "A", text: acc }],
+                  selectedTextIdx: 0,
+                  visualSlots: chb.visualSlots || [],
+                  model: chb.model,
+                };
+                return { ...m, bundle };
+              }),
+            );
+          },
+          onDone: () => {},
+          onError: (msg) => {
+            streamErr = msg || "Stream error";
+          },
+        });
+        if (streamErr) throw new Error(streamErr);
+        result = { variants: parseTextVariants(acc.trim(), numVariants), model: studioTextModel };
+      } else {
+        result = await generateText({
+          input: sourceText,
+          channel: channelId,
+          templateId: userMsg.templateId || selectedTemplateId,
+          brand: activeBrand,
+          numVariants,
+          tone: userMsg.tone || tone,
+          apiKeys,
+          textModel: studioTextModel,
+        });
+      }
+      setCurrentMessages(p => p.map(m => { if (m.id !== messageId) return m; const bundle = { ...m.bundle }; bundle[channelId] = { ...bundle[channelId], textVariants: result.variants, selectedTextIdx: 0, ...(channelId === "short-video" ? { klingJob: undefined } : {}) }; return { ...m, bundle }; }));
       addToast(`Regenerated ${CHANNELS.find(c => c.id === channelId)?.label || channelId}`, "success");
     } catch (error) { addToast(`Regen failed: ${error.message}`, "error"); }
     finally { setIsGenerating(false); setGenerationPhase(null); }
@@ -1904,7 +3048,7 @@ export default function Workspace({ user, onLogout }) {
           slot: slotData.slot,
           brand: activeBrand,
           contentSummary,
-          provider: "openai",
+          provider: studioImageProvider === STUDIO_IMAGE_PROVIDER_GEMINI ? "gemini" : "openai",
           numVariants: 1,
           apiKeys,
           designerOptions: {
@@ -1915,7 +3059,10 @@ export default function Workspace({ user, onLogout }) {
             extractedContent: extractedForImages,
             designerImage: true,
             omitContentTextInImage: true,
-            openaiImageModel: studioImageModel,
+            imageProvider: studioImageProvider === STUDIO_IMAGE_PROVIDER_GEMINI ? "gemini" : "openai",
+            ...(studioImageProvider === STUDIO_IMAGE_PROVIDER_OPENAI
+              ? { openaiImageModel: studioImageModel }
+              : {}),
           },
         });
         if (result.images?.[0]?.url) {
@@ -1969,11 +3116,13 @@ export default function Workspace({ user, onLogout }) {
               : [{ url: firstGeneratedUrl, designerContent: extractedForImages, label: "Visual" }];
           const idx = options.length > 0 ? activeIndex : 0;
           const cur = list[idx];
-          primeDesignerEmbed(cur.url, cur.designerContent ?? extractedForImages, {
-            postSizeId: designerPostSizeId,
-            designerWhiteBg,
-            themeId: designerThemeId,
-          }, activeBrand || null);
+          primeDesignerEmbed(
+            cur.url,
+            cur.designerContent ?? extractedForImages,
+            designerLayoutForEmbed(),
+            activeBrand || null,
+            String(apiKeys?.anthropic_key || "").trim() || null,
+          );
           setDesignerOverlay({
             open: true,
             embedKey: Date.now(),
@@ -1985,6 +3134,137 @@ export default function Workspace({ user, onLogout }) {
       }
     }
   };
+
+  const shortVideoKlingJob = useMemo(() => {
+    const lastAi = [...currentMessages].reverse().find((m) => m.role === "assistant");
+    return lastAi?.bundle?.["short-video"]?.klingJob ?? null;
+  }, [currentMessages]);
+
+  const patchShortVideoKlingJob = useCallback((patch) => {
+    setCurrentMessages((prev) => {
+      const lastAi = [...prev].reverse().find((m) => m.role === "assistant");
+      if (!lastAi?.bundle?.["short-video"]) return prev;
+      const existing = lastAi.bundle["short-video"].klingJob || {};
+      return prev.map((m) => {
+        if (m.id !== lastAi.id) return m;
+        const bundle = { ...m.bundle };
+        bundle["short-video"] = {
+          ...bundle["short-video"],
+          klingJob: { ...existing, ...patch },
+        };
+        return { ...m, bundle };
+      });
+    });
+  }, []);
+
+  const handleShortVideoKlingJob = useCallback(
+    (result) => {
+      setCurrentMessages((prev) => {
+        const lastAi = [...prev].reverse().find((m) => m.role === "assistant");
+        if (!lastAi?.bundle?.["short-video"]) return prev;
+        return prev.map((m) => {
+          if (m.id !== lastAi.id) return m;
+          const bundle = { ...m.bundle };
+          bundle["short-video"] = {
+            ...bundle["short-video"],
+            klingJob: {
+              jobId: result?.jobId,
+              status: result?.status,
+              message: result?.message,
+              estimatedDuration: result?.estimatedDuration,
+              at: new Date().toISOString(),
+            },
+          };
+          return { ...m, bundle };
+        });
+      });
+      if (result?.jobId) {
+        addToast("Kling job started — video will appear here when ready", "success");
+      } else if (result?.message) {
+        addToast(result.message, "info");
+      }
+    },
+    [addToast],
+  );
+
+  const shortVideoKlingJobRef = useRef(shortVideoKlingJob);
+  shortVideoKlingJobRef.current = shortVideoKlingJob;
+
+  useEffect(() => {
+    const jobId = shortVideoKlingJob?.jobId;
+    if (!jobId || shortVideoKlingJob?.pollStopped) return;
+
+    const j0 = shortVideoKlingJobRef.current;
+    if (j0?.kieState === "success" && j0?.videoUrls?.length) return;
+    if (j0?.kieState === "fail") return;
+
+    let cancelled = false;
+    let intervalId = null;
+    const started = Date.now();
+    const maxMs = 15 * 60 * 1000;
+    let successToastSent = false;
+
+    const stop = () => {
+      if (intervalId != null) {
+        clearInterval(intervalId);
+        intervalId = null;
+      }
+    };
+
+    async function tick() {
+      if (cancelled) return;
+      const j = shortVideoKlingJobRef.current;
+      if (!j?.jobId || j.jobId !== jobId || j.pollStopped) return;
+      if (j.kieState === "success" && j.videoUrls?.length) {
+        stop();
+        return;
+      }
+      if (j.kieState === "fail") {
+        stop();
+        return;
+      }
+      if (Date.now() - started > maxMs) {
+        stop();
+        patchShortVideoKlingJob({ pollStopped: true, pollError: "Timed out after 15 minutes." });
+        addToast("Kling video is taking too long — check Kie AI or try again.", "error");
+        return;
+      }
+      try {
+        const s = await fetchKieVideoTaskStatus({ taskId: jobId, apiKeys });
+        if (cancelled) return;
+        const next = {
+          kieState: s.state,
+          failMsg: s.failMsg || null,
+          failCode: s.failCode || null,
+          lastPollError: null,
+        };
+        if (s.state === "success" && Array.isArray(s.videoUrls) && s.videoUrls.length > 0) {
+          next.videoUrls = s.videoUrls;
+        }
+        patchShortVideoKlingJob(next);
+        if (s.state === "success" && s.videoUrls?.length) {
+          stop();
+          if (!successToastSent) {
+            successToastSent = true;
+            addToast("Kling video is ready", "success");
+          }
+        } else if (s.state === "fail") {
+          stop();
+          addToast(s.failMsg || "Video generation failed", "error");
+        }
+      } catch (e) {
+        if (cancelled) return;
+        patchShortVideoKlingJob({ lastPollError: e?.message || "Status check failed" });
+      }
+    }
+
+    tick();
+    intervalId = setInterval(tick, 3000);
+    return () => {
+      cancelled = true;
+      stop();
+    };
+  }, [shortVideoKlingJob?.jobId, shortVideoKlingJob?.pollStopped, apiKeys, patchShortVideoKlingJob, addToast]);
 
   const getCurrentBundle = () => { const last = [...currentMessages].reverse().find(m => m.role === "assistant"); return last?.bundle || {}; };
 
@@ -2035,7 +3315,11 @@ export default function Workspace({ user, onLogout }) {
         >
           <span style={{ fontSize: 11, fontWeight: 700, color: "#A0A3B1", textTransform: "uppercase", letterSpacing: "0.04em" }}>Models</span>
           <span style={{ fontSize: 10, color: "#6B7084", lineHeight: 1.3, textAlign: "left", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "100%" }}>
-            {studioModelShort(STUDIO_TEXT_MODEL_OPTIONS, studioTextModel)} · {studioModelShort(STUDIO_IMAGE_MODEL_OPTIONS, studioImageModel)} · {studioModelShort(STUDIO_VIDEO_MODEL_OPTIONS, studioVideoModel)}
+            {studioModelShort(STUDIO_TEXT_MODEL_OPTIONS, studioTextModel)} ·{" "}
+            {studioImageProvider === STUDIO_IMAGE_PROVIDER_GEMINI
+              ? "Gemini"
+              : studioModelShort(STUDIO_IMAGE_MODEL_OPTIONS, studioImageModel)}{" "}
+            · {studioModelShort(STUDIO_VIDEO_MODEL_OPTIONS, studioVideoModel)}
           </span>
         </button>
         {modelsMenuOpen && (
@@ -2065,13 +3349,34 @@ export default function Workspace({ user, onLogout }) {
               </select>
             </label>
             <label style={{ display: "block", marginBottom: 12 }}>
-              <span style={{ display: "block", fontSize: 11, color: "#8B8DA3", marginBottom: 6 }}>Image (OpenAI)</span>
-              <select value={studioImageModel} onChange={(e) => setStudioImageModel(normalizeStudioImageModel(e.target.value))} style={STUDIO_MODEL_SELECT_STYLE}>
-                {STUDIO_IMAGE_MODEL_OPTIONS.map((o) => (
-                  <option key={o.id} value={o.id}>{o.label}</option>
-                ))}
+              <span style={{ display: "block", fontSize: 11, color: "#8B8DA3", marginBottom: 6 }}>Image engine</span>
+              <select
+                value={studioImageProvider}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  if (v === STUDIO_IMAGE_PROVIDER_GEMINI && !geminiImageConfigured) return;
+                  setStudioImageProvider(
+                    v === STUDIO_IMAGE_PROVIDER_GEMINI ? STUDIO_IMAGE_PROVIDER_GEMINI : STUDIO_IMAGE_PROVIDER_OPENAI
+                  );
+                }}
+                style={STUDIO_MODEL_SELECT_STYLE}
+              >
+                <option value={STUDIO_IMAGE_PROVIDER_OPENAI}>OpenAI (GPT Image)</option>
+                <option value={STUDIO_IMAGE_PROVIDER_GEMINI} disabled={!geminiImageConfigured}>
+                  Gemini (Google AI){!geminiImageConfigured ? " — add key in Settings" : ""}
+                </option>
               </select>
             </label>
+            {studioImageProvider === STUDIO_IMAGE_PROVIDER_OPENAI && (
+              <label style={{ display: "block", marginBottom: 12 }}>
+                <span style={{ display: "block", fontSize: 11, color: "#8B8DA3", marginBottom: 6 }}>OpenAI image model</span>
+                <select value={studioImageModel} onChange={(e) => setStudioImageModel(normalizeStudioImageModel(e.target.value))} style={STUDIO_MODEL_SELECT_STYLE}>
+                  {STUDIO_IMAGE_MODEL_OPTIONS.map((o) => (
+                    <option key={o.id} value={o.id}>{o.label}</option>
+                  ))}
+                </select>
+              </label>
+            )}
             <label style={{ display: "block", marginBottom: 4 }}>
               <span style={{ display: "block", fontSize: 11, color: "#8B8DA3", marginBottom: 6 }}>Video (Kling)</span>
               <select value={studioVideoModel} onChange={(e) => setStudioVideoModel(normalizeStudioVideoModel(e.target.value))} style={STUDIO_MODEL_SELECT_STYLE}>
@@ -2102,11 +3407,11 @@ export default function Workspace({ user, onLogout }) {
       {!leftCollapsed && <PanelDivider onDrag={(dx) => setLeftWidth(w => Math.max(200, Math.min(500, w + dx)))} />}
       <CenterPanel activeChannels={activeChannels} setActiveChannels={setActiveChannels} setActiveChannel={setActiveChannel} linkedinIncludeCarousel={linkedinIncludeCarousel} setLinkedinIncludeCarousel={setLinkedinIncludeCarousel} activeBrand={activeBrand} apiKeys={apiKeys} serverStatus={serverStatus} onSelectPreview={setPreviewData} messages={currentMessages} setMessages={setCurrentMessages} projectTitle={projectTitle} selectedTemplateId={selectedTemplateId} setSelectedTemplateId={setSelectedTemplateId} inputMode={inputMode} setInputMode={setInputMode} tone={tone} setTone={setTone} isGenerating={isGenerating} setIsGenerating={setIsGenerating} generationPhase={generationPhase} setGenerationPhase={setGenerationPhase} addToast={addToast} onRegenerate={regenerateChannel} onGenerateImage={generateAllImages} onOpenDesigner={openDesignerWithImage} designerPostSizeId={designerPostSizeId} setDesignerPostSizeId={setDesignerPostSizeId} designerWhiteBg={designerWhiteBg} setDesignerWhiteBg={setDesignerWhiteBg} designerThemeId={designerThemeId} setDesignerThemeId={setDesignerThemeId} designerHideLogo={designerHideLogo} studioTextModel={studioTextModel} />
       {!rightCollapsed && <PanelDivider onDrag={(dx) => setRightWidth(w => Math.max(280, Math.min(600, w - dx)))} />}
-      <RightPanel activeChannels={activeChannels} setActiveChannels={setActiveChannels} activeChannel={activeChannel} setActiveChannel={setActiveChannel} collapsed={rightCollapsed} previewData={previewData} addToast={addToast} activeBrand={activeBrand} onTextEdit={handlePreviewTextEdit} onOpenDesigner={openDesignerWithImage} designerPostSizeId={designerPostSizeId} designerWhiteBg={designerWhiteBg} designerHideLogo={designerHideLogo} width={rightWidth} apiKeys={apiKeys} tone={tone} selectedTemplateId={selectedTemplateId} studioTextModel={studioTextModel} />
+      <RightPanel activeChannels={activeChannels} setActiveChannels={setActiveChannels} activeChannel={activeChannel} setActiveChannel={setActiveChannel} collapsed={rightCollapsed} previewData={previewData} addToast={addToast} activeBrand={activeBrand} onTextEdit={handlePreviewTextEdit} onOpenDesigner={openDesignerWithImage} designerPostSizeId={designerPostSizeId} designerWhiteBg={designerWhiteBg} designerHideLogo={designerHideLogo} width={rightWidth} apiKeys={apiKeys} serverStatus={serverStatus} tone={tone} selectedTemplateId={selectedTemplateId} studioTextModel={studioTextModel} setStudioTextModel={setStudioTextModel} studioVideoModel={studioVideoModel} shortVideoKlingJob={shortVideoKlingJob} onShortVideoKlingJob={handleShortVideoKlingJob} isGenerating={isGenerating} />
     </div>
 
     <ApiKeysModal open={showApiKeys} onClose={() => setShowApiKeys(false)} apiKeys={apiKeys} setApiKeys={setApiKeys} serverStatus={serverStatus} addToast={addToast} />
-    <BrandEditor open={brandEditorOpen} onClose={() => { setBrandEditorOpen(false); setEditingBrand(null); }} onSave={handleSaveBrand} editBrand={editingBrand} />
+    <BrandEditor open={brandEditorOpen} onClose={() => { setBrandEditorOpen(false); setEditingBrand(null); }} onSave={handleSaveBrand} editBrand={editingBrand} apiKeys={apiKeys} />
     <ExportModal open={showExport} onClose={() => setShowExport(false)} activeChannels={activeChannels} currentBundle={getCurrentBundle()} addToast={addToast} activeBrand={activeBrand} />
     <ToastContainer toasts={toasts} />
     <DesignerOverlay

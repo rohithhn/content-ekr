@@ -12,7 +12,7 @@ AI-powered content studio that generates publish-ready, brand-consistent content
 - **Landing Page**: Conversion-optimized pages with animated HTML export
 
 ### AI-Powered Image Generation
-- DALL-E 3 integration for professional, brand-consistent visuals
+- GPT Image (OpenAI `images.generate`, default **gpt-image-1.5**) for professional, brand-consistent visuals
 - Automatic image generation for long-form content (blog, article, landing)
 - Manual generation for social channels (LinkedIn, Twitter)
 - Content-aware prompts — images are generated based on the actual text output, not just the topic
@@ -72,7 +72,7 @@ AI-powered content studio that generates publish-ready, brand-consistent content
 
 - **Framework**: Next.js 15 (App Router)
 - **UI**: React 19, inline styles
-- **AI Models**: Claude (Anthropic) for text, DALL-E 3 (OpenAI) for images, Kling 2.0 for video
+- **AI Models**: Claude (Anthropic) for text, GPT Image 1.5 (OpenAI) for images, Kling 2.0 for video
 - **Persistence**: Dexie.js (IndexedDB wrapper), localStorage
 - **State**: Zustand (available), React useState + useEffect (active)
 - **Deployment**: Vercel, Docker, AWS ECS
@@ -124,8 +124,8 @@ Set **Root Directory** to **`content-studio`** when deploying that app. Root **`
 | Provider | Model | Used For | Required? |
 |----------|-------|----------|-----------|
 | Anthropic | Claude | Text generation | **Yes** (core) |
-| OpenAI | DALL-E 3 | Image generation | Optional |
-| Nano Banana | Latest | Image generation (alt) | Optional |
+| OpenAI | GPT Image 1.5 (`gpt-image-1.5`) | Image generation | Optional |
+| Nano Banana 2 | Generate-2 (nanobananaapi.ai) | Image generation (alt) | Optional |
 | Kuaishou | Kling 2.0 | Video generation | Optional |
 
 At minimum, you need an Anthropic API key for text generation. Keys can be configured in `.env.local` or supplied per-session via the settings modal (gear icon).
@@ -138,7 +138,7 @@ content-engine/
 │   ├── api/
 │   │   ├── generate/
 │   │   │   ├── text/route.js      # Claude text generation with streaming
-│   │   │   ├── image/route.js     # DALL-E 3 / Nano Banana image generation
+│   │   │   ├── image/route.js     # GPT Image 1.5 / Nano Banana 2 image generation
 │   │   │   └── video/route.js     # Kling 2.0 video generation
 │   │   ├── url-parse/route.js     # URL content extraction (Readability)
 │   │   └── status/route.js        # AI provider availability check

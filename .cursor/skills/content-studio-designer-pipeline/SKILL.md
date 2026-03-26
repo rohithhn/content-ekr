@@ -6,9 +6,13 @@ description: >-
   flags (trns, white bg); mirrored TS/JS prompt builders; Content Studio embed and API routes.
   Use when changing designer image prompts, omitContentTextInImage behavior, LeftPanel generation,
   PreviewPanel layout, generate/image API, designer-app build, or DesignerOverlay embed sync.
+  For the full content→brief→image flow, 7-field brief spec, red rules, failure modes, and
+  per-brand “Create skill” workflow, use visual-designer-content-flow (Enkrypt canonical base).
 ---
 
 # Content Studio — Visual designer pipeline
+
+**Deep-dive (Enkrypt canonical + per-brand skill authoring):** see **`visual-designer-content-flow`** in `.cursor/skills/visual-designer-content-flow/SKILL.md`. The old **`designer-content-flow`** name redirects there.
 
 ## Repo map (two implementations — keep in sync)
 

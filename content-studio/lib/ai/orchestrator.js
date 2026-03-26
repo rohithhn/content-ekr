@@ -5,9 +5,12 @@
  * Supports client-supplied API keys forwarded via request headers.
  */
 
+import { parseTextVariants } from "@/lib/ai/parseTextVariants";
+
 const KEY_HEADERS = {
   anthropic_key: "x-anthropic-key",
   openai_key: "x-openai-key",
+  gemini_key: "x-gemini-key",
   nanobanana_key: "x-nanobanana-key",
   kling_key: "x-kling-key",
 };
@@ -272,6 +275,27 @@ export async function generateVideo({
   return response.json();
 }
 
+/**
+ * Poll Kie AI task status (via Content Studio proxy). Returns state + videoUrls when success.
+ */
+export async function fetchKieVideoTaskStatus({ taskId, apiKeys = {} }) {
+  const t = trimKey(taskId);
+  if (!t) throw new Error("Missing taskId");
+
+  const headers = buildHeaders(apiKeys);
+  const response = await fetch(`/api/generate/video/status?taskId=${encodeURIComponent(t)}`, {
+    method: "GET",
+    headers,
+  });
+
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(body.error || "Could not fetch video task status");
+  }
+
+  return body;
+}
+
 export async function generateContentBundle({
   input,
   channels,
@@ -281,13 +305,59 @@ export async function generateContentBundle({
   tone = "Professional",
   apiKeys = {},
   textModel,
+  /** Landing / HTML video: incremental HTML as the model streams (single-channel runs only). */
+  onStreamChannelText,
 }) {
   const bundle = {};
+
+  const allowStreamProgress =
+    typeof onStreamChannelText === "function" &&
+    channels.length === 1 &&
+    (channels[0] === "landing" || channels[0] === "html-video");
 
   const textPromises = channels.map(async (channelId) => {
     try {
       const cappedVariants =
-        channelId === "landing" || channelId === "html-video" ? 1 : numTextVariants;
+        channelId === "landing" || channelId === "html-video" || channelId === "short-video"
+          ? 1
+          : numTextVariants;
+
+      const useSse =
+        allowStreamProgress && (channelId === "landing" || channelId === "html-video");
+
+      if (useSse) {
+        const response = await generateText({
+          input,
+          channel: channelId,
+          templateId,
+          brand,
+          numVariants: cappedVariants,
+          tone,
+          apiKeys,
+          textModel,
+          stream: true,
+        });
+        if (!response.ok) {
+          const err = await response.json().catch(() => ({}));
+          throw new Error(err.error || `Text generation failed (${response.status})`);
+        }
+        let accumulated = "";
+        let streamErr = null;
+        await consumeTextStream(response, {
+          onChunk: (t) => {
+            accumulated += t;
+            onStreamChannelText(channelId, accumulated);
+          },
+          onDone: () => {},
+          onError: (msg) => {
+            streamErr = msg || "Stream error";
+          },
+        });
+        if (streamErr) throw new Error(streamErr);
+        const variants = parseTextVariants(accumulated.trim(), cappedVariants);
+        return { channelId, variants, model: textModel || "streamed" };
+      }
+
       const result = await generateText({
         input,
         channel: channelId,
@@ -346,8 +416,11 @@ export async function consumeTextStream(response, { onChunk, onDone, onError }) 
           }
           try {
             const parsed = JSON.parse(data);
+            if (parsed.error) {
+              onError?.(parsed.error);
+              return;
+            }
             if (parsed.text) onChunk?.(parsed.text);
-            if (parsed.error) onError?.(parsed.error);
           } catch {}
         }
       }
@@ -366,4 +439,30 @@ export async function checkProviderStatus() {
   } catch {
     return {};
   }
+}
+
+export async function getNotionAuthUrl(state) {
+  const response = await fetch("/api/notion/auth-url", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ state }),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(data.error || "Could not start Notion auth");
+  }
+  return data;
+}
+
+export async function syncNotionPages({ token, pageUrls = [] }) {
+  const response = await fetch("/api/notion/sync", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ token, pageUrls }),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(data.error || "Notion sync failed");
+  }
+  return data;
 }

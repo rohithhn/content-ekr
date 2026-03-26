@@ -5,10 +5,14 @@ import {
   composeSystemPromptWithEnkryptSkill,
   buildLandingSystemPromptFromSkill,
 } from "@/lib/prompts/load-enkrypt-frontend-skill";
-import { composeSystemPromptWithHtmlVideoSkill } from "@/lib/prompts/load-html-video-builder-skill";
+import {
+  composeSystemPromptWithHtmlVideoSkill,
+  composeSystemPromptWithShortVideoSkill,
+} from "@/lib/prompts/load-html-video-builder-skill";
 import { ENKRYPT_ANTHROPIC_TEXT_GENERATION_MODEL } from "@/lib/designer-image/llmConstants";
 import { brandDisplayName } from "@/lib/brand/brandLogos";
 import { isStudioTextModelId } from "@/config/constants";
+import { parseTextVariants } from "@/lib/ai/parseTextVariants";
 
 /** Vercel / long-running Claude completion (full HTML pages). */
 export const maxDuration = 300;
@@ -22,7 +26,7 @@ const DEFAULT_MAX_TOKENS = 4096;
 /** One full HTML document per response; multi-variant would exceed max_tokens and stall or truncate. */
 function effectiveTextVariantsForChannel(channel, requested) {
   const n = Math.min(4, Math.max(1, Math.floor(Number(requested) || 1)));
-  if (channel === "landing" || channel === "html-video") return 1;
+  if (channel === "landing" || channel === "html-video" || channel === "short-video") return 1;
   return n;
 }
 
@@ -50,7 +54,7 @@ const LANDING_REVISE_SYSTEM_SUFFIX = `
 
 LANDING REVISE MODE (this request only):
 - The user supplied a **complete HTML document** plus **edit instructions**.
-- Apply **only** what they asked for. Preserve theme toggle, logo src wiring, and Enkrypt brand rules where not asked to change.
+- Apply **only** what they asked for. Preserve **both light and dark** theme styling and the theme toggle unless SOURCE asks to remove one mode. Preserve **logo pairing**: \`data-theme="light"\` → \`logos.primary\` URL; \`data-theme="dark"\` → \`logos.dark\` URL — do not invert or collapse to a single logo unless the user asked.
 - Output **only** the full updated HTML document from DOCTYPE through closing html tag. No markdown fences, no commentary.
 - If instructions are narrow, change **only** those parts; keep the rest intact unless a fix is required for validity.`;
 
@@ -121,15 +125,19 @@ export async function POST(request) {
         systemPrompt += `\n\nVARIANTS: Generate exactly ${effectiveNumVariants} complete HTML documents. Label each with [VARIANT A], [VARIANT B], etc. before each full document.`;
       }
     } else {
-      systemPrompt = composeSystemPromptWithHtmlVideoSkill(
-        composeSystemPromptWithEnkryptSkill(
-          buildSystemPrompt({
-            channel,
-            templateId: templateId || null,
-            brand: brand || null,
-            numVariants: effectiveNumVariants,
-          }),
-          channel
+      systemPrompt = composeSystemPromptWithShortVideoSkill(
+        composeSystemPromptWithHtmlVideoSkill(
+          composeSystemPromptWithEnkryptSkill(
+            buildSystemPrompt({
+              channel,
+              templateId: templateId || null,
+              brand: brand || null,
+              numVariants: effectiveNumVariants,
+            }),
+            channel
+          ),
+          channel,
+          { origin: requestOrigin, brand: brand || null }
         ),
         channel,
         { origin: requestOrigin, brand: brand || null }
@@ -157,6 +165,12 @@ Build the **complete** single-file HTML document per the HTML VIDEO BUILDER skil
 Use the **RUNTIME ASSETS** section in the system prompt for every logo or wordmark (\`<img src="…">\` must be one of those exact URLs — never invented paths).
 
 Output **only** raw HTML: start with \`<!DOCTYPE html>\` or \`<html\`. No markdown code fences, no explanation after \`</html>\`.\n\n---\n\n${userMessage}`;
+    }
+    if (channel === "short-video") {
+      userMessage = `[SHORT VIDEO — Kling text-to-video]
+Use the source material below plus **BRAND GUIDELINES**, **RUNTIME ASSETS**, and **KLING / TEXT-TO-VIDEO** in your system prompt.
+
+Output **only** one continuous cinematic **English video prompt** (about 150–400 words) suitable for a text-to-video API. No markdown fences, no JSON, no preamble.\n\n---\n\n${userMessage}`;
     }
     if (channel === "landing") {
       userMessage = buildLandingUserMessage(input, tone, effectiveNumVariants, brand || null);
@@ -214,7 +228,7 @@ Output **only** raw HTML: start with \`<!DOCTYPE html>\` or \`<html\`. No markdo
 
     const text = extractTextFromMessage(message);
 
-    const variants = parseVariants(text, effectiveNumVariants);
+    const variants = parseTextVariants(text, effectiveNumVariants);
 
     return NextResponse.json({
       variants,
@@ -287,7 +301,7 @@ async function handleLandingRevise({
 
   const message = await client.messages.create(params);
   const text = extractTextFromMessage(message);
-  const variants = parseVariants(text, numVariants);
+  const variants = parseTextVariants(text, numVariants);
 
   return NextResponse.json({
     variants,
@@ -324,7 +338,9 @@ Build a **complete single-file marketing landing page** from the source material
 RULES:
 - Output **only** one HTML document: from \`<!DOCTYPE html>\` through \`</html>\`.
 - **Nav, logo wordmark text, \`<title>\`, meta, hero, footer** must use **${who}** (and SOURCE) — never "Enkrypt AI" unless that is literally this brand.
-- Include all CSS in \`<style>\` (use the skill’s CSS variables and components). Include theme-toggle + logo \`src\` swap script using the **exact** logo URLs from RUNTIME ASSETS.
+- **Light + dark mode (required):** Ship **both** a complete **light** UI and **dark** UI using the **enkrypt-frontend-design** skill tokens (surfaces, text, borders — not logo-only). Include a **visible theme toggle** and \`data-theme\` on \`<html>\`.
+- **Logos + theme (non-negotiable):** Follow **RUNTIME ASSETS** — \`data-theme="light"\` → \`logos.primary\` URL (dark glyph on light bg); \`data-theme="dark"\` → \`logos.dark\` URL (light glyph on dark bg). Implement \`logo.src\` swap with the toggle exactly as RUNTIME ASSETS; never use one URL for both; never invert pairing (skill filenames like \`logo-light.svg\` are illustrations only — **only** the two RUNTIME URLs count).
+- Include all CSS in \`<style>\` (use the skill’s CSS variables and components).
 - Primary CTAs / gradients must match **BRAND VISUAL OVERRIDE** when present.
 - Pick **one** design direction from the skill’s list and execute it fully.
 - No markdown code fences. No text before or after the HTML.`;
@@ -348,39 +364,3 @@ function extractTextFromMessage(message) {
     .join("\n");
 }
 
-/**
- * Parse AI output into separate variants when multiple were requested.
- * Looks for [VARIANT A], [VARIANT B], etc. markers.
- */
-function parseVariants(text, expectedCount) {
-  if (expectedCount <= 1) {
-    return [{ id: "v-0", label: "A", text: text.trim() }];
-  }
-
-  const variants = [];
-  const labels = ["A", "B", "C", "D", "E"];
-
-  for (let i = 0; i < expectedCount; i++) {
-    const label = labels[i];
-    const marker = `[VARIANT ${label}]`;
-    const nextMarker = i < expectedCount - 1 ? `[VARIANT ${labels[i + 1]}]` : null;
-
-    const startIdx = text.indexOf(marker);
-    if (startIdx === -1) continue;
-
-    const contentStart = startIdx + marker.length;
-    const endIdx = nextMarker ? text.indexOf(nextMarker) : text.length;
-
-    variants.push({
-      id: `v-${i}`,
-      label,
-      text: text.substring(contentStart, endIdx === -1 ? text.length : endIdx).trim(),
-    });
-  }
-
-  if (variants.length === 0) {
-    return [{ id: "v-0", label: "A", text: text.trim() }];
-  }
-
-  return variants;
-}

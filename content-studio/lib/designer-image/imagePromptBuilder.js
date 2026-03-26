@@ -51,7 +51,9 @@ export async function buildVisualBrief(rawContent, content, apiKey, provider) {
   const trimmed = rawContent?.trim() ?? "";
   if (!trimmed) return getFallbackVisualBrief(content);
 
-  const prompt = `You are a world-class art director creating a structured visual brief for an AI image generator. Quality bar: Wired magazine, MIT Technology Review. Safe and generic is failure.
+  const prompt = `ENGINE CONTRACT (Content Studio visual designer — visual-designer-content-flow): Your output is the structured VISUAL BRIEF merged into the final prompt. A separate image model (OpenAI GPT Image or Gemini) renders the bitmap; do not describe API details. Follow every field rule below.
+
+You are a world-class art director creating a structured visual brief for an AI image generator. Quality bar: Wired magazine, MIT Technology Review. Safe and generic is failure.
 
 STEP 1 — RED SIGNAL SCAN (do this first, before any creative decisions):
 Scan the content below for ANY of these signals:

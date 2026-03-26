@@ -1,5 +1,10 @@
 import { useState } from "react";
 import { ChevronDown } from "lucide-react";
+import {
+  normalizeTextColorSettings,
+  hexForColorInput,
+  DEFAULT_TEXT_COLOR_SETTINGS,
+} from "@/app/utils/textColorSettings";
 
 /* ── Types (aligned with App Settings) ── */
 interface TextSlotPos {
@@ -51,6 +56,8 @@ export interface RightPanelSettings {
     subheading: SlotColorSettings;
     footer: SlotColorSettings;
   };
+  /** Content Studio embed: brand colors for default chips + preview */
+  brandFromStudio?: { colors?: { primary?: string; secondary?: string } | null } | null;
 }
 
 interface RightPanelProps {
@@ -169,12 +176,6 @@ function SliderControl({
   );
 }
 
-const defaultTextColorSettings = {
-  heading: { baseColor: "#FFFFFF", useGradient: true, wordStyles: {} as Record<number, WordStyle> },
-  subheading: { baseColor: "#000000", useGradient: false, wordStyles: {} as Record<number, WordStyle> },
-  footer: { baseColor: "#FFFFFF", useGradient: true, wordStyles: {} as Record<number, WordStyle> },
-};
-
 export function RightPanel({ settings, onSettingsChange, onContentGenerated }: RightPanelProps) {
   const [isEditMode, setIsEditMode] = useState(false);
   const [editValues, setEditValues] = useState<GeneratedContent>({ heading: "", subheading: "", footer: "" });
@@ -198,7 +199,9 @@ export function RightPanel({ settings, onSettingsChange, onContentGenerated }: R
     subheading: { size: 27, weight: 600 },
     footer: { size: 24, weight: 400 },
   };
-  const tColors = s.textColorSettings ?? defaultTextColorSettings;
+  const tColors = normalizeTextColorSettings(
+    s.textColorSettings ?? DEFAULT_TEXT_COLOR_SETTINGS,
+  );
   const useH = s.useHeading;
   const useSH = s.useSubheading;
   const useF = s.useFooter;
@@ -404,9 +407,41 @@ export function RightPanel({ settings, onSettingsChange, onContentGenerated }: R
         title="Typography & colors"
         hint="Default size/weight/color per line. Click individual words below a line for overrides (color, gradient, size, weight, bold, strikethrough)."
       >
-      {editableFields.map((field) => {
+      {(() => {
+        const brandPrimaryRaw = s.brandFromStudio?.colors?.primary?.trim() || "";
+        const brandPrimaryChip = brandPrimaryRaw
+          ? hexForColorInput(
+              brandPrimaryRaw.startsWith("#") ? brandPrimaryRaw : `#${brandPrimaryRaw}`,
+              "#FF7404",
+            )
+          : hexForColorInput(DEFAULT_TEXT_COLOR_SETTINGS.heading.baseColor, "#FF7404");
+        const baseColorPresets = [
+          { label: "White", value: "#FFFFFF" },
+          { label: "Light", value: "#E0E0E0" },
+          { label: "Muted", value: "#A4A7AE" },
+          { label: "Dark", value: "#414651" },
+          { label: "Purple", value: "#7F56D9" },
+          { label: "Blue", value: "#194185" },
+          { label: "Red", value: "#D92D20" },
+          { label: "Coral", value: "#F4A89A" },
+        ];
+        const colorPresets = (() => {
+          const out: { label: string; value: string }[] = [];
+          const seen = new Set<string>();
+          const add = (p: { label: string; value: string }) => {
+            const k = p.value.toLowerCase();
+            if (seen.has(k)) return;
+            seen.add(k);
+            out.push(p);
+          };
+          if (brandPrimaryChip) add({ label: "Brand primary", value: brandPrimaryChip });
+          add({ label: "Black", value: "#000000" });
+          baseColorPresets.forEach(add);
+          return out;
+        })();
+        return editableFields.map((field) => {
         const fs2 = fontSettings[field];
-        const cs = tColors[field] ?? defaultTextColorSettings[field];
+        const cs = tColors[field];
         const isEnabled = fieldChecks[field];
         const words = (content?.[field] ?? "").split(" ").filter(Boolean);
         const weightOptions = [
@@ -417,16 +452,7 @@ export function RightPanel({ settings, onSettingsChange, onContentGenerated }: R
           { label: "Bold", value: 700 },
           { label: "ExtraBold", value: 800 },
         ];
-        const colorPresets = [
-          { label: "White", value: "#FFFFFF" },
-          { label: "Light", value: "#E0E0E0" },
-          { label: "Muted", value: "#A4A7AE" },
-          { label: "Dark", value: "#414651" },
-          { label: "Purple", value: "#7F56D9" },
-          { label: "Blue", value: "#194185" },
-          { label: "Red", value: "#D92D20" },
-          { label: "Coral", value: "#F4A89A" },
-        ];
+        const slotColorFallback = field === "subheading" ? "#000000" : "#FFFFFF";
         return (
           <CollapsibleBlock
             key={field}
@@ -489,10 +515,14 @@ export function RightPanel({ settings, onSettingsChange, onContentGenerated }: R
                     }}
                   />
                 ))}
-                <label className="relative w-6 h-6 rounded-full border-2 border-border cursor-pointer overflow-hidden" title="Custom color">
+                <label
+                  key={`${field}-slot-color`}
+                  className="relative w-6 h-6 rounded-full border-2 border-border cursor-pointer overflow-hidden shrink-0"
+                  title="Custom color"
+                >
                   <input
                     type="color"
-                    value={cs.baseColor}
+                    value={hexForColorInput(cs.baseColor, slotColorFallback)}
                     disabled={!isEnabled}
                     onChange={(e) =>
                       onSettingsChange({
@@ -501,7 +531,14 @@ export function RightPanel({ settings, onSettingsChange, onContentGenerated }: R
                     }
                     className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
                   />
-                  <div className="w-full h-full" style={{ background: "conic-gradient(red, yellow, lime, aqua, blue, magenta, red)" }} />
+                  <div
+                    className="w-full h-full pointer-events-none"
+                    style={{
+                      background: cs.useGradient
+                        ? "linear-gradient(135deg, var(--gradient-start), var(--gradient-end))"
+                        : hexForColorInput(cs.baseColor, slotColorFallback),
+                    }}
+                  />
                 </label>
                 <button
                   type="button"
@@ -698,7 +735,8 @@ export function RightPanel({ settings, onSettingsChange, onContentGenerated }: R
             </div>
           </CollapsibleBlock>
         );
-      })}
+      });
+      })()}
       </SettingsSection>
     </div>
   );

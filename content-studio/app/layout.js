@@ -14,7 +14,16 @@ export default function RootLayout({ children }) {
           rel="stylesheet"
         />
       </head>
-      <body>{children}</body>
+      <body
+        style={{
+          margin: 0,
+          minHeight: "100vh",
+          backgroundColor: "#0C0D14",
+          color: "#E2E4EA",
+        }}
+      >
+        {children}
+      </body>
     </html>
   );
 }

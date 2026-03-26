@@ -3,7 +3,7 @@
  *
  * Two variants:
  *  v1 — Auto:         AI extracts content + auto-generates a creative image instruction
- *                     + generates the full image via gpt-image-1 / Gemini.
+ *                     + generates the full image via OpenAI GPT Image (model from prefs) / Gemini.
  *
  *  v2 — Guided:       Same but the user writes their own image instruction.
  *
@@ -308,7 +308,7 @@ export function StudioPanel({ provider, apiKeyRaw, initialContent }: StudioPanel
         });
       }
 
-      // Step 3: generate the full image via gpt-image-1
+      // Step 3: generate the full image (OpenAI GPT Image / Gemini)
       setGenStep("image");
       const dataURL = await generateStudioImage({
         instruction: imageInstruction,

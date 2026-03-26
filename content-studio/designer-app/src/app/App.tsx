@@ -15,18 +15,56 @@ import { TextToolsSplitLayout } from "./components/TextToolsSplitLayout";
 import { TextOutputPanel } from "./components/TextOutputPanel";
 import type { PreviewToolbarApi } from "./types/previewToolbar";
 import type { AppMode } from "./types/appMode";
-import { peekStudioBrandSession } from "../../../lib/brand/studioBrandBridge.js";
+import {
+  peekDesignerAnthropicSession,
+  peekStudioBrandSession,
+} from "../../../lib/brand/studioBrandBridge.js";
+import { ENKRYPT_GRADIENT_START } from "../../../lib/brand/enkrypt-defaults.js";
+import {
+  DEFAULT_TEXT_COLOR_SETTINGS,
+  mergeTextColorSettingsPatch,
+} from "./utils/textColorSettings";
 
 /** Serialized from Content Studio Brand Editor → sessionStorage → embed */
 interface StudioBrandEmbedPayload {
   logoPlacement: string;
   logos: { primary: string | null; dark: string | null };
   colors: Record<string, string> | null;
+  gradients?: Array<{
+    type?: string;
+    angle?: number;
+    stops?: Array<{ color?: string }>;
+  }> | null;
   typography: { heading_font?: string; body_font?: string } | null;
   company_name: string;
   tagline: string;
   logosDescription: string;
   visual_style: { image_style?: string; icon_style?: string } | null;
+  /** From serializeStudioBrandForDesigner — when false, heading/footer use solid primary */
+  primary_as_gradient?: boolean;
+}
+
+function trimHex(v: unknown): string {
+  return typeof v === "string" && v.trim() ? v.trim() : "";
+}
+
+/** Marketing primary for overlay text — same sources as image prompt color rules. */
+function resolveEmbedMarketingPrimaryHex(
+  studioBrand: StudioBrandEmbedPayload,
+): string {
+  const bc = studioBrand.colors;
+  const primary = trimHex(bc?.primary);
+  if (primary) return primary;
+  const g0 = studioBrand.gradients?.[0];
+  if (g0?.stops?.length) {
+    for (const stop of g0.stops) {
+      const c = trimHex(stop?.color);
+      if (c) return c;
+    }
+  }
+  const secondary = trimHex(bc?.secondary);
+  if (secondary) return secondary;
+  return trimHex(bc?.accent);
 }
 
 /* ── Error Boundary ── */
@@ -215,21 +253,9 @@ export default function App() {
     mode: "general",
     slotGap: 14,
     textColorSettings: {
-      heading: {
-        baseColor: "#FFFFFF",
-        useGradient: true,
-        wordStyles: {},
-      },
-      subheading: {
-        baseColor: "#000000",
-        useGradient: false,
-        wordStyles: {},
-      },
-      footer: {
-        baseColor: "#FFFFFF",
-        useGradient: true,
-        wordStyles: {},
-      },
+      heading: { ...DEFAULT_TEXT_COLOR_SETTINGS.heading, wordStyles: {} },
+      subheading: { ...DEFAULT_TEXT_COLOR_SETTINGS.subheading, wordStyles: {} },
+      footer: { ...DEFAULT_TEXT_COLOR_SETTINGS.footer, wordStyles: {} },
     },
     variations: [],
     activeVariation: 0,
@@ -239,6 +265,17 @@ export default function App() {
   const [previewToolbar, setPreviewToolbar] = useState<PreviewToolbarApi | null>(null);
   /** Content Studio iframe: hide General / Blog / Writer / Researcher chrome */
   const [isEmbedUi, setIsEmbedUi] = useState(false);
+  /** Claude — visual brief (image prompt) step; pixels still from OpenAI/Gemini in LeftPanel */
+  const [anthropicKeyForBrief, setAnthropicKeyForBrief] = useState("");
+
+  useEffect(() => {
+    try {
+      if (new URLSearchParams(window.location.search).get("embed") === "1") return;
+      setAnthropicKeyForBrief(localStorage.getItem("enkrypt-anthropic-key") || "");
+    } catch {
+      /* ignore */
+    }
+  }, []);
 
   /**
    * Embedded in ContentEngine: parent sets `ce_designer_embed_visual` and optional
@@ -250,10 +287,10 @@ export default function App() {
       const params = new URLSearchParams(window.location.search);
       if (params.get("embed") !== "1") return;
       setIsEmbedUi(true);
+      setAnthropicKeyForBrief(peekDesignerAnthropicSession() || "");
       let visual: string | null = null;
       const stored = sessionStorage.getItem("ce_designer_embed_visual");
       if (stored) {
-        sessionStorage.removeItem("ce_designer_embed_visual");
         visual = stored;
       } else {
         const q = params.get("image");
@@ -263,7 +300,6 @@ export default function App() {
       let embedContent: GeneratedContent | null = null;
       const contentStored = sessionStorage.getItem("ce_designer_embed_content");
       if (contentStored) {
-        sessionStorage.removeItem("ce_designer_embed_content");
         try {
           const parsed = JSON.parse(contentStored) as Record<string, string>;
           embedContent = {
@@ -281,9 +317,9 @@ export default function App() {
         (embedContent.heading || embedContent.subheading || embedContent.footer);
 
       const layoutPatch: Partial<Settings> = {};
+      let embedWhiteBg = false;
       const pidStored = sessionStorage.getItem("ce_designer_embed_post_size_id");
       if (pidStored != null) {
-        sessionStorage.removeItem("ce_designer_embed_post_size_id");
         if (pidStored === "1080x1080-trns") {
           layoutPatch.postSizeId = "1080x1080-trns";
           layoutPatch.size = { width: 1080, height: 1080 };
@@ -297,18 +333,16 @@ export default function App() {
       }
       const wbStored = sessionStorage.getItem("ce_designer_embed_white_bg");
       if (wbStored !== null) {
-        sessionStorage.removeItem("ce_designer_embed_white_bg");
-        layoutPatch.designerWhiteBg = wbStored === "1";
+        embedWhiteBg = wbStored === "1";
+        layoutPatch.designerWhiteBg = embedWhiteBg;
       }
       const themeStored = sessionStorage.getItem("ce_designer_embed_theme_id");
       if (themeStored != null) {
-        sessionStorage.removeItem("ce_designer_embed_theme_id");
         layoutPatch.theme = themeStored;
         layoutPatch.selectedThemes = [themeStored];
       }
       const hideLogoStored = sessionStorage.getItem("ce_designer_embed_hide_logo");
       if (hideLogoStored !== null) {
-        sessionStorage.removeItem("ce_designer_embed_hide_logo");
         layoutPatch.hideLogo = hideLogoStored === "1";
       }
 
@@ -319,20 +353,42 @@ export default function App() {
           (layoutPatch as { logoPosition?: string }).logoPosition =
             studioBrand.logoPlacement;
         }
-        const bc = studioBrand.colors as
-          | { primary?: string; secondary?: string; text_body?: string }
-          | undefined;
-        if (bc?.primary && bc?.secondary) {
-          (layoutPatch as Partial<Settings>).textColorSettings = {
-            heading: { baseColor: bc.primary, useGradient: true, wordStyles: {} },
-            subheading: {
-              baseColor: bc.text_body || "#374151",
-              useGradient: false,
-              wordStyles: {},
-            },
-            footer: { baseColor: bc.secondary, useGradient: true, wordStyles: {} },
-          };
-        }
+      }
+
+      /* Overlay: heading/footer = marketing primary (Brand Editor); subheading = black.
+         Preset when brand, visual, structure text, or white canvas — avoids white-on-white defaults. */
+      const shouldPresetEmbedTextColors =
+        (studioBrand && typeof studioBrand === "object") ||
+        !!visual ||
+        !!hasText ||
+        embedWhiteBg;
+      if (shouldPresetEmbedTextColors) {
+        const fromBrand =
+          studioBrand && typeof studioBrand === "object"
+            ? resolveEmbedMarketingPrimaryHex(studioBrand)
+            : "";
+        const primaryHex = fromBrand || ENKRYPT_GRADIENT_START;
+        const useBrandGradient =
+          !studioBrand ||
+          typeof studioBrand !== "object" ||
+          studioBrand.primary_as_gradient !== false;
+        (layoutPatch as Partial<Settings>).textColorSettings = {
+          heading: {
+            baseColor: primaryHex,
+            useGradient: useBrandGradient,
+            wordStyles: {},
+          },
+          subheading: {
+            baseColor: "#000000",
+            useGradient: false,
+            wordStyles: {},
+          },
+          footer: {
+            baseColor: primaryHex,
+            useGradient: useBrandGradient,
+            wordStyles: {},
+          },
+        };
       }
 
       const hasLayout = Object.keys(layoutPatch).length > 0;
@@ -395,7 +451,20 @@ export default function App() {
   }, []);
 
   const handleSettingsPatch = useCallback((patch: Partial<Settings>) => {
-    setSettings((prev) => (prev ? { ...prev, ...patch } : prev));
+    setSettings((prev) => {
+      if (!prev) return prev;
+      if (patch.textColorSettings) {
+        return {
+          ...prev,
+          ...patch,
+          textColorSettings: mergeTextColorSettingsPatch(
+            prev.textColorSettings,
+            patch.textColorSettings,
+          ),
+        };
+      }
+      return { ...prev, ...patch };
+    });
   }, []);
 
   const handleGenerateVisual = useCallback(() => {
@@ -537,6 +606,8 @@ export default function App() {
             setProvider={setProvider}
             apiKeyRaw={apiKeyRaw}
             setApiKeyRaw={setApiKeyRaw}
+            anthropicKeyRaw={anthropicKeyForBrief}
+            setAnthropicKeyRaw={setAnthropicKeyForBrief}
             mode={mode}
             setMode={handleSetMode}
             embed={isEmbedUi}
@@ -555,6 +626,7 @@ export default function App() {
                 hasContent={hasContent}
                 provider={provider}
                 apiKeyRaw={apiKeyRaw}
+                anthropicKeyForBrief={anthropicKeyForBrief}
                 headerMode={mode}
                 mode={mode === "blog" ? "blog" : "general"}
                 setMode={handleSetMode}
