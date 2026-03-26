@@ -41,6 +41,27 @@ function isFullLandingHtml(text) {
   return /^<!DOCTYPE\s+html/i.test(doc) || /^<html[\s>]/i.test(doc);
 }
 
+/** prepare-source brief before full-page Opus is redundant for these channels; skipping saves one Claude call. */
+function shouldSkipChannelBriefForUrl(channels) {
+  if (!channels?.length) return false;
+  return channels.every((id) => id === "landing" || id === "html-video");
+}
+
+function loadingTextForTextPhase(activeChannels) {
+  if (!activeChannels?.length) return "Generating text…";
+  const only = activeChannels.length === 1 ? activeChannels[0] : null;
+  if (only === "landing") {
+    return "Building full landing page (Claude Opus — a complete page often takes 2–8 min)…";
+  }
+  if (only === "html-video") {
+    return "Building HTML video (Claude Opus — large single file, often several minutes)…";
+  }
+  if (activeChannels.some((id) => id === "landing" || id === "html-video")) {
+    return `Generating for ${activeChannels.length} channels — landing / HTML video steps are the slowest…`;
+  }
+  return `Generating text for ${activeChannels.length} channel${activeChannels.length > 1 ? "s" : ""}`;
+}
+
 /** Chevron for styled native `<select>` (no custom overlay / portal). */
 const NATIVE_SELECT_CHEVRON =
   "url(\"data:image/svg+xml;charset=UTF-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%238B8DA3' d='M3 4.5L6 7.5L9 4.5'/%3E%3C/svg%3E\")";
@@ -575,24 +596,30 @@ function CenterPanel({ activeChannels, setActiveChannels, setActiveChannel, link
         try {
           const parsed = await parseUrl(rawInput, apiKeys);
           const merged = `Source: ${parsed.title || rawInput}\n\n${parsed.content || parsed.excerpt || ""}`;
-          addToast("Article fetched — analyzing for your channels…", "success");
-          setGenerationPhase("prepare");
-          try {
-            const prep = await prepareSourceArticle({
-              title: parsed.title || "",
-              content: merged,
-              channels: activeChannels,
-              templateId: selectedTemplateId || null,
-              willGenerateImages: numVisual > 0,
-              apiKeys,
-            });
-            preparedInput = prep.preparedInput;
-            addToast("Channel-aware brief ready", "success");
-          } catch (e) {
-            preparedInput = merged;
-            addToast(e?.message ? `Brief step skipped: ${e.message}` : "Brief step skipped — using article text", "warning");
+          addToast("Article fetched", "success");
+          if (shouldSkipChannelBriefForUrl(activeChannels)) {
+            contentInput = merged;
+            addToast("Brief step skipped for landing / HTML video — using article text directly", "info");
+          } else {
+            addToast("Analyzing for your channels…", "info");
+            setGenerationPhase("prepare");
+            try {
+              const prep = await prepareSourceArticle({
+                title: parsed.title || "",
+                content: merged,
+                channels: activeChannels,
+                templateId: selectedTemplateId || null,
+                willGenerateImages: numVisual > 0,
+                apiKeys,
+              });
+              preparedInput = prep.preparedInput;
+              addToast("Channel-aware brief ready", "success");
+            } catch (e) {
+              preparedInput = merged;
+              addToast(e?.message ? `Brief step skipped: ${e.message}` : "Brief step skipped — using article text", "warning");
+            }
+            contentInput = preparedInput || merged;
           }
-          contentInput = preparedInput || merged;
         } catch {
           addToast("URL fetch failed — using pasted text only", "warning");
           contentInput = rawInput;
@@ -677,7 +704,7 @@ function CenterPanel({ activeChannels, setActiveChannels, setActiveChannel, link
           </div>) : (<div style={{ maxWidth: "95%", width: "100%" }}><GenerationCard bundle={msg.bundle} channels={msg.channels} onUpdateBundle={(updater) => handleBundleUpdate(msg.id, updater)} onCopy={handleCopy} onRegenerate={(chId) => onRegenerate(msg.id, chId)} onGenerateImage={(chId) => onGenerateImage?.(msg.id, chId)} onOpenDesigner={onOpenDesigner} isGenerating={isGenerating} activeBrand={activeBrand} designerPostSizeId={designerPostSizeId} designerWhiteBg={designerWhiteBg} designerHideLogo={designerHideLogo} /></div>)}
           <span style={{ fontSize: 10, color: "#52556B", padding: "0 4px" }}>{msg.time}</span>
         </div>))}
-        {isGenerating && (<div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 6 }}><div style={{ padding: "20px 24px", borderRadius: 14, background: "rgba(108,43,217,0.06)", border: "1px solid rgba(108,43,217,0.15)", width: "100%" }}><LoadingDots text={generationPhase === "url" ? "Fetching article" : generationPhase === "prepare" ? "Claude: channel-aware brief" : generationPhase === "text" ? `Generating text for ${activeChannels.length} channel${activeChannels.length > 1 ? "s" : ""}` : generationPhase === "images" ? "Generating images" : "Working"} /><div style={{ marginTop: 10, display: "flex", gap: 6 }}>{activeChannels.map(chId => { const c = CHANNELS.find(x => x.id === chId); return c ? <span key={chId} style={{ fontSize: 10, fontWeight: 600, padding: "3px 8px", borderRadius: 4, background: c.color + "15", color: c.color }}>{c.label}</span> : null; })}</div></div></div>)}
+        {isGenerating && (<div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 6 }}><div style={{ padding: "20px 24px", borderRadius: 14, background: "rgba(108,43,217,0.06)", border: "1px solid rgba(108,43,217,0.15)", width: "100%" }}><LoadingDots text={generationPhase === "url" ? "Fetching article" : generationPhase === "prepare" ? "Claude: channel-aware brief" : generationPhase === "text" ? loadingTextForTextPhase(activeChannels) : generationPhase === "images" ? "Generating images" : "Working"} /><div style={{ marginTop: 10, display: "flex", gap: 6 }}>{activeChannels.map(chId => { const c = CHANNELS.find(x => x.id === chId); return c ? <span key={chId} style={{ fontSize: 10, fontWeight: 600, padding: "3px 8px", borderRadius: 4, background: c.color + "15", color: c.color }}>{c.label}</span> : null; })}</div></div></div>)}
         <div ref={endRef} />
       </div>)}
     </div>
