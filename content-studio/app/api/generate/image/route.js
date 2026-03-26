@@ -6,6 +6,7 @@ import {
   postSizeIdToCanvasSize,
   buildDesignerOpenAiImagePrompt,
 } from "@/lib/designer-image/buildDesignerOpenAiPrompt";
+import { serializeStudioBrandForDesigner } from "@/lib/brand/studioBrandBridge";
 import { DESIGNER_OPENAI_IMAGE_MODEL } from "@/lib/designer-image/llmConstants";
 
 /** Fallback when not using designer-identical pipeline */
@@ -68,6 +69,8 @@ export async function POST(request) {
         request.headers.get("x-anthropic-key") || process.env.ANTHROPIC_API_KEY || "";
       const visualBriefApiKey = (anthropicKey || apiKey).replace(/[^\x20-\x7E]/g, "").trim();
       const visualBriefProvider = anthropicKey ? "claude" : imageProvider === "gemini" ? "gemini" : "openai";
+      const requestOrigin = new URL(request.url).origin;
+      const studioBrandPayload = serializeStudioBrandForDesigner(brand || null, requestOrigin);
 
       if (designerImage) {
         const size = postSizeIdToCanvasSize(
@@ -115,6 +118,7 @@ export async function POST(request) {
             omitContentTextInImage,
             variationIdx: i,
             layoutOverrides: { hideLogo: !!designerHideLogo },
+            studioBrandPayload,
           });
 
           const response = await client.images.generate({

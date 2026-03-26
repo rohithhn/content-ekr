@@ -4,6 +4,7 @@
  */
 
 import { ENKRYPT_GRADIENT_END, ENKRYPT_GRADIENT_START } from "./enkrypt-defaults.js";
+import { resolveLogosForHtmlGeneration } from "./brandLogos.js";
 
 export const CE_DESIGNER_EMBED_BRAND_KEY = "ce_designer_embed_brand";
 
@@ -28,11 +29,14 @@ export function serializeStudioBrandForDesigner(brand, origin) {
     return t;
   };
   const logos = brand.logos && typeof brand.logos === "object" ? brand.logos : {};
+  const resolved = resolveLogosForHtmlGeneration(brand, base);
+  const primaryUploaded = abs(logos.primary);
+  const darkUploaded = abs(logos.dark);
   return {
     logoPlacement: brand.logo_placement || "top-left",
     logos: {
-      primary: abs(logos.primary),
-      dark: abs(logos.dark),
+      primary: primaryUploaded || resolved.lightLogo,
+      dark: darkUploaded || resolved.darkLogo,
     },
     colors: brand.colors && typeof brand.colors === "object" ? { ...brand.colors } : null,
     gradients: Array.isArray(brand.gradients) ? JSON.parse(JSON.stringify(brand.gradients)) : null,

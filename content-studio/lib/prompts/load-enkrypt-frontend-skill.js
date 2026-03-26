@@ -6,9 +6,9 @@
 import fs from "fs";
 import path from "path";
 import {
-  ENKRYPT_LOGO_FOR_LIGHT_BACKGROUND,
-  ENKRYPT_LOGO_FOR_DARK_BACKGROUND,
-} from "@/lib/brand/enkrypt-defaults";
+  resolveLogosForHtmlGeneration,
+  buildBrandVisualDirectiveForHtml,
+} from "@/lib/brand/brandLogos";
 
 let cached = null;
 
@@ -20,29 +20,9 @@ function tryRead(filePath) {
   }
 }
 
-function toAbsoluteLogoUrl(pathOrUrl, origin) {
-  if (!pathOrUrl) return "";
-  if (/^https?:\/\//i.test(pathOrUrl)) return pathOrUrl;
-  const base = (origin || "").replace(/\/$/, "");
-  const p = pathOrUrl.startsWith("/") ? pathOrUrl : `/${pathOrUrl}`;
-  return base ? `${base}${p}` : pathOrUrl;
-}
-
-/**
- * Resolved logo URLs for generated HTML (landing, HTML video) so `<img src>` works in iframe preview.
- * @param {object|null|undefined} brand
- * @param {string} origin — request origin, e.g. https://localhost:3000
- * @returns {{ company: string, lightLogo: string, darkLogo: string }}
- */
+/** @deprecated Use resolveLogosForHtmlGeneration — kept for callers importing this name */
 export function resolveBrandLogoAbsoluteUrls(brand, origin) {
-  const company = (brand?.company_name || brand?.name || "Enkrypt AI").trim() || "Enkrypt AI";
-  const lightPath = brand?.logos?.primary || ENKRYPT_LOGO_FOR_LIGHT_BACKGROUND;
-  const darkPath = brand?.logos?.dark || ENKRYPT_LOGO_FOR_DARK_BACKGROUND;
-  return {
-    company,
-    lightLogo: toAbsoluteLogoUrl(lightPath, origin),
-    darkLogo: toAbsoluteLogoUrl(darkPath, origin),
-  };
+  return resolveLogosForHtmlGeneration(brand, origin);
 }
 
 /**
@@ -68,9 +48,10 @@ export function getEnkryptFrontendSkillBodyForApi() {
  */
 export function buildLandingSystemPromptFromSkill({ brand = null, origin = "", brandContextText = "" } = {}) {
   const skill = getEnkryptFrontendSkillBodyForApi();
-  const { company, lightLogo, darkLogo } = resolveBrandLogoAbsoluteUrls(brand, origin);
+  const { company, lightLogo, darkLogo } = resolveLogosForHtmlGeneration(brand, origin);
 
   const brandBlock = (brandContextText || "").trim();
+  const visualDirective = buildBrandVisualDirectiveForHtml(brand);
 
   const runtime = `
 ---
@@ -86,13 +67,14 @@ export function buildLandingSystemPromptFromSkill({ brand = null, origin = "", b
 - \`${darkLogo}\`
 - Use when switching to dark theme (swap \`logo.src\` per the skill).
 
-Implement theme toggle + logo swap exactly as in the skill. Do **not** invent other Enkrypt logo paths.
+URLs may be **SVG data-URI placeholders** (brand-colored) when no uploaded lockup exists — use them **exactly** as \`src\`; do not swap in generic or Enkrypt assets.
 
-**Deliverable:** One complete, valid HTML5 document (\`<!DOCTYPE html>\` … \`</html>\`), self-contained. Primary CTA styling must match \`cta-primary\` in the skill (gradient #FF7404 → #FF3BA2). Load Inter from Google Fonts. No markdown fences in the output.
+Implement theme toggle + logo swap per the skill. **Deliverable:** One complete HTML5 document (\`<!DOCTYPE html>\` … \`</html>\`), self-contained. Primary CTA / gradients must follow **BRAND VISUAL OVERRIDE** when that section appears below; otherwise follow \`cta-primary\` in the skill. No markdown fences in the output.
 `.trim();
 
-  const parts = [skill || "(Skill file missing — use Enkrypt gradient #FF7404→#FF3BA2, Inter, and logo URLs above.)", runtime];
+  const parts = [skill || "(Skill file missing — use BRAND VISUAL OVERRIDE and RUNTIME ASSETS.)", runtime];
   if (brandBlock) parts.push(`---\n${brandBlock}`);
+  if (visualDirective) parts.push(visualDirective);
   return parts.join("\n\n");
 }
 

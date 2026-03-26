@@ -348,12 +348,14 @@ export function buildBrandContext(brand) {
     brand.logos?.description ? `- Logo: ${brand.logos.description}` : "",
     brand.logo_placement ? `- Logo placement: ${brand.logo_placement.replace("-", " ")} on visual assets` : "",
     brand.logos?.primary
-      ? `- logos.primary (dark wordmark on LIGHT surfaces — default Enkrypt: enkrypt-logo-light-bg.png): ${brand.logos.primary}`
+      ? `- logos.primary (dark wordmark on LIGHT surfaces): ${brand.logos.primary}`
       : "",
     brand.logos?.dark
-      ? `- logos.dark (light wordmark on DARK surfaces — default Enkrypt: enkrypt-logo-dark-bg.png): ${brand.logos.dark}`
+      ? `- logos.dark (light wordmark on DARK surfaces): ${brand.logos.dark}`
       : "",
-    brand.logos?.primary || brand.logos?.dark ? `- Use the Brand Editor lockup URLs above for landing and designer; do not invent different logo assets` : "",
+    brand.logos?.primary || brand.logos?.dark
+      ? `- Use the Brand Editor lockup URLs above for landing/designer; do not invent different logo files`
+      : `- No logo files uploaded — the API supplies brand-colored SVG placeholder data-URIs in RUNTIME ASSETS; use those exact URLs`,
     brand.sample_backgrounds?.length ? `- Brand has ${brand.sample_backgrounds.length} sample background(s) for social posts — maintain visual consistency with established look` : "",
     brand.sample_templates?.length ? `- Brand has ${brand.sample_templates.length} post template(s) — follow the established layout and composition patterns` : "",
   ];

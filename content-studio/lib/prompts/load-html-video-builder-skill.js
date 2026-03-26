@@ -5,7 +5,10 @@
 
 import fs from "fs";
 import path from "path";
-import { resolveBrandLogoAbsoluteUrls } from "@/lib/prompts/load-enkrypt-frontend-skill";
+import {
+  resolveLogosForHtmlGeneration,
+  buildBrandVisualDirectiveForHtml,
+} from "@/lib/brand/brandLogos";
 
 let cached = null;
 
@@ -57,8 +60,9 @@ export function composeSystemPromptWithHtmlVideoSkill(baseSystemPrompt, channel,
   if (!skill) return baseSystemPrompt;
 
   const origin = typeof opts.origin === "string" ? opts.origin : "";
-  const { company, lightLogo, darkLogo } = resolveBrandLogoAbsoluteUrls(opts.brand ?? null, origin);
+  const { company, lightLogo, darkLogo } = resolveLogosForHtmlGeneration(opts.brand ?? null, origin);
   const safeCompany = company.replace(/"/g, '\\"');
+  const visualDirective = buildBrandVisualDirectiveForHtml(opts.brand ?? null);
 
   const runtimeLogos = `
 ---
@@ -69,16 +73,18 @@ export function composeSystemPromptWithHtmlVideoSkill(baseSystemPrompt, channel,
 - **Dark wordmark on LIGHT scenes** (bright backgrounds, light end cards): \`${lightLogo}\`
 - **Light/white wordmark on DARK scenes** (typical cinematic dark slides): \`${darkLogo}\`
 
-**Mandatory:** Any logo, wordmark, corner bug, opening splash, or end card must use real \`<img src="…" alt="${safeCompany}" />\` with one of the URLs above. Do **not** use placeholder paths, invented filenames, text-only SVG wordmarks, or generic “LOGO” text instead of these assets. Choose light-on-dark vs dark-on-light by scene background for contrast.
+**Mandatory:** Any logo, wordmark, corner bug, opening splash, or end card must use \`<img src="…" alt="${safeCompany}" />\` with one of the URLs above (including SVG data-URI placeholders when no file was uploaded). Do **not** invent other paths or substitute Enkrypt default assets. Choose light-on-dark vs dark-on-light by scene background for contrast.
 `.trim();
+
+  const tail = [runtimeLogos, visualDirective].filter(Boolean).join("\n\n");
 
   return `${baseSystemPrompt}
 
 ---
 FULL HTML VIDEO BUILDER SKILL (automatically loaded — skill id: **html-video-builder**)
-The specification below is **mandatory** for this task. Build a single-file 1280×720 scene-sequencer HTML document per the skill — scene count, durations, and visuals follow the **user’s source** and brand context. **Honor RUNTIME ASSETS** for every brand mark.
+The specification below is **mandatory** for this task. Build a single-file 1280×720 scene-sequencer HTML document per the skill — scene count, durations, and visuals follow the **user’s source** and brand context. **Honor RUNTIME ASSETS** and **BRAND VISUAL OVERRIDE** (when present) for colors and marks.
 
 ${skill}
 
-${runtimeLogos}`;
+${tail}`;
 }
