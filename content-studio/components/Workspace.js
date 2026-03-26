@@ -1784,6 +1784,7 @@ export default function Workspace({ user, onLogout }) {
         themeId: designerThemeId,
         postSizeId: designerPostSizeId,
         designerWhiteBg,
+        brand: activeBrand || null,
         apiKeys,
       });
       if (structured?.heading || structured?.subheading || structured?.footer) {

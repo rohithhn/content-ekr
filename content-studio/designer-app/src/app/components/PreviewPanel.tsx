@@ -1,4 +1,4 @@
-import { useRef, useEffect, useState } from "react";
+import { useRef, useEffect, useState, useMemo } from "react";
 import { Download, ChevronLeft, ChevronRight, Crop, Pencil, Loader2, X } from "lucide-react";
 import { CropModal } from "./CropModal";
 import type { PreviewToolbarApi } from "@/app/types/previewToolbar";
@@ -8,6 +8,36 @@ import { ENKRYPT_PREVIEW_GRADIENT_STOPS } from "@studio-brand";
 import bg1x1 from "@/assets/bg-1x1.png";
 import bg1x1Trns from "@/assets/bg-1x1-trns.png";
 import bg16x9 from "@/assets/placeholder-theme.svg";
+
+function hexToRgbPreview(hex: string) {
+  const h = hex.replace("#", "");
+  return {
+    r: parseInt(h.substring(0, 2), 16),
+    g: parseInt(h.substring(2, 4), 16),
+    b: parseInt(h.substring(4, 6), 16),
+  };
+}
+
+function lerpHexPreview(a: string, b: string, t: number): string {
+  const pa = hexToRgbPreview(a);
+  const pb = hexToRgbPreview(b);
+  const r = Math.round(pa.r + (pb.r - pa.r) * t);
+  const g = Math.round(pa.g + (pb.g - pa.g) * t);
+  const bl = Math.round(pa.b + (pb.b - pa.b) * t);
+  return `rgb(${r},${g},${bl})`;
+}
+
+function gradientStopsFromStudio(
+  studio: { colors?: { primary?: string; secondary?: string } } | null | undefined,
+): string[] {
+  const p = studio?.colors?.primary?.trim();
+  const s = studio?.colors?.secondary?.trim();
+  if (p && s) {
+    const mid = lerpHexPreview(p, s, 0.5);
+    return [p, mid, s];
+  }
+  return [...ENKRYPT_PREVIEW_GRADIENT_STOPS];
+}
 
 interface FontSetting {
   size: number;
@@ -168,6 +198,11 @@ export function PreviewPanel({ settings, shouldRender, toolbar }: PreviewPanelPr
   const logoSrc =
     pickDesignerLogoUrl(s?.brandFromStudio ?? null, designerWhiteBg) ||
     enkryptLogo;
+
+  const brandGradientStops = useMemo(
+    () => gradientStopsFromStudio(s?.brandFromStudio ?? null),
+    [s?.brandFromStudio?.colors?.primary, s?.brandFromStudio?.colors?.secondary],
+  );
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -511,8 +546,8 @@ export function PreviewPanel({ settings, shouldRender, toolbar }: PreviewPanelPr
       logoImg.src = logoSrc;
     }
 
-    // ── Gradient colors for brand gradient (from CSS --gradient-start / --gradient-end) ──
-    const GRADIENT_STOPS = ENKRYPT_PREVIEW_GRADIENT_STOPS;
+    // ── Gradient colors: Content Studio brand when embedded, else Enkrypt defaults ──
+    const GRADIENT_STOPS = brandGradientStops;
 
     // ── Text rendering with per-word styling ──
     function drawAllText() {
@@ -663,7 +698,7 @@ export function PreviewPanel({ settings, shouldRender, toolbar }: PreviewPanelPr
         b: parseInt(h.substring(4, 6), 16),
       };
     }
-  }, [currentSize, pad, logoPos, logoScale, hideLogo, slotGap, visualImage, content, useH, useSH, useF, shouldRender, fs, vSlot, tSlots, currentMode, tColors, exportTrigger, s?.postSizeId, visualImageBorderRadius, logoSrc, designerWhiteBg]);
+  }, [currentSize, pad, logoPos, logoScale, hideLogo, slotGap, visualImage, content, useH, useSH, useF, shouldRender, fs, vSlot, tSlots, currentMode, tColors, exportTrigger, s?.postSizeId, visualImageBorderRadius, logoSrc, designerWhiteBg, brandGradientStops]);
 
   const handleDownload = () => {
     const canvas = canvasRef.current;

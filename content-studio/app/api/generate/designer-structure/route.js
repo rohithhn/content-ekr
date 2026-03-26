@@ -18,6 +18,7 @@ export async function POST(request) {
       postSizeId = "1080x1080",
       designerWhiteBg = false,
       customInstructions = "",
+      brand = null,
     } = body;
 
     if (!rawContent || !String(rawContent).trim()) {
@@ -42,6 +43,7 @@ export async function POST(request) {
       postSizeId,
       designerWhiteBg: !!designerWhiteBg,
       customInstructions: String(customInstructions || ""),
+      brand: brand && typeof brand === "object" ? brand : null,
     });
 
     const message = await client.messages.create({

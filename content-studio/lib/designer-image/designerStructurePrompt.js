@@ -8,6 +8,7 @@ import {
   postSizeIdToCanvasSize,
   isDesignerTrnsPostSize,
 } from "./buildDesignerOpenAiPrompt";
+import { brandDisplayName } from "@/lib/brand/brandLogos";
 
 const POSITION_LABELS = {
   "top-left": "↖ Top Left",
@@ -43,7 +44,7 @@ function buildLayoutContextLines(postSizeId, designerWhiteBg = false) {
       "Background: User selected **1:1 trns** — TRANSPARENT EXPORT. The app composites on arbitrary backgrounds; favor copy that stays clear on both light and dark surfaces.";
   } else {
     bgLine =
-      "Background: warm peach/coral Enkrypt AI branded gradient (already provided — do NOT recreate the bg)";
+      "Background: a single soft light wash from the **active brand palette** (see Content Studio brand context if provided) — not a specific third-party gradient unless the brief says so.";
   }
   const exportNote = trns
     ? "\n- Export note: Same pixel dimensions as 1:1 (1080×1080); transparency is for compositing."
@@ -66,6 +67,7 @@ export function buildDesignerStructureUserPrompt({
   postSizeId = "1080x1080",
   designerWhiteBg = false,
   customInstructions = "",
+  brand = null,
 }) {
   const selectedTheme = getThemeById(themeId);
   const paletteStr = selectedTheme.palette.join(", ");
@@ -78,7 +80,12 @@ export function buildDesignerStructureUserPrompt({
   const sourceDesc =
     "Take the following raw content and structure it into text fields that would fit naturally into the template layout shown in the image.";
 
-  return `You are a content creator for Enkrypt AI (AI security company).\n\n${
+  const brandLine =
+    brand && typeof brand === "object"
+      ? `Active brand (use in footer/tagline **only** when it fits the topic): **${brandDisplayName(brand)}**. Do **not** substitute "Enkrypt AI" or other companies unless the raw content is about them.\n\n`
+      : `Do **not** substitute unrelated company names (e.g. "Enkrypt AI") unless the raw content is explicitly about that company.\n\n`;
+
+  return `You structure short on-image copy (heading / subheading / footer) for social visuals.\n\n${brandLine}${
     isNoTemplate
       ? "No specific template is selected. Use a clean, modern, professional tone."
       : `Style reference: "${selectedTheme.label}"\n${selectedTheme.promptContext}`

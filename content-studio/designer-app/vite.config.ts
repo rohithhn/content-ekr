@@ -88,12 +88,19 @@ export default defineConfig({
     tailwindcss(),
   ],
   resolve: {
-    alias: {
-      // Alias @ to the src directory
-      '@': path.resolve(__dirname, './src'),
+    alias: [
+      /** Shared `content-studio/lib/*` — same `@/lib/...` imports as Next.js */
+      {
+        find: /^@\/lib\/(.*)$/,
+        replacement: `${path.resolve(__dirname, '../lib')}/$1`,
+      },
+      { find: '@', replacement: path.resolve(__dirname, './src') },
       /** Shared with Content Studio Workspace + landing — one source for Enkrypt tokens */
-      '@studio-brand': path.resolve(__dirname, '../lib/brand/enkrypt-defaults.js'),
-    },
+      {
+        find: '@studio-brand',
+        replacement: path.resolve(__dirname, '../lib/brand/enkrypt-defaults.js'),
+      },
+    ],
   },
 
   // File types to support raw imports. Never add .css, .tsx, or .ts files to this.

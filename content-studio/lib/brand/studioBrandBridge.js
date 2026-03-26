@@ -4,7 +4,7 @@
  */
 
 import { ENKRYPT_GRADIENT_END, ENKRYPT_GRADIENT_START } from "./enkrypt-defaults.js";
-import { resolveLogosForHtmlGeneration } from "./brandLogos.js";
+import { resolveLogosForHtmlGeneration, brandDisplayName } from "./brandLogos.js";
 
 export const CE_DESIGNER_EMBED_BRAND_KEY = "ce_designer_embed_brand";
 
@@ -41,7 +41,7 @@ export function serializeStudioBrandForDesigner(brand, origin) {
     colors: brand.colors && typeof brand.colors === "object" ? { ...brand.colors } : null,
     gradients: Array.isArray(brand.gradients) ? JSON.parse(JSON.stringify(brand.gradients)) : null,
     typography: brand.typography && typeof brand.typography === "object" ? { ...brand.typography } : null,
-    company_name: brand.company_name || brand.name || "",
+    company_name: brandDisplayName(brand),
     tagline: brand.tagline || "",
     logosDescription: logos.description || "",
     visual_style: brand.visual_style && typeof brand.visual_style === "object" ? { ...brand.visual_style } : null,
@@ -60,6 +60,32 @@ export function writeStudioBrandToSession(brand, origin) {
   }
 }
 
+/**
+ * Read embed brand without removing — required because React Strict Mode runs the
+ * designer iframe bootstrap effect twice; clearing on first read leaves the second pass
+ * with no brand (Enkrypt logo + gradient fallbacks).
+ */
+export function peekStudioBrandSession() {
+  try {
+    if (typeof sessionStorage === "undefined") return null;
+    const s = sessionStorage.getItem(CE_DESIGNER_EMBED_BRAND_KEY);
+    if (!s) return null;
+    return JSON.parse(s);
+  } catch {
+    return null;
+  }
+}
+
+export function clearStudioBrandSession() {
+  try {
+    if (typeof sessionStorage === "undefined") return;
+    sessionStorage.removeItem(CE_DESIGNER_EMBED_BRAND_KEY);
+  } catch {
+    /* ignore */
+  }
+}
+
+/** @deprecated Prefer peekStudioBrandSession + clearStudioBrandSession on overlay close */
 export function readAndClearStudioBrandSession() {
   try {
     if (typeof sessionStorage === "undefined") return null;

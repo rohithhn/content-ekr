@@ -15,7 +15,7 @@ import { TextToolsSplitLayout } from "./components/TextToolsSplitLayout";
 import { TextOutputPanel } from "./components/TextOutputPanel";
 import type { PreviewToolbarApi } from "./types/previewToolbar";
 import type { AppMode } from "./types/appMode";
-import { readAndClearStudioBrandSession } from "../../../lib/brand/studioBrandBridge.js";
+import { peekStudioBrandSession } from "../../../lib/brand/studioBrandBridge.js";
 
 /** Serialized from Content Studio Brand Editor → sessionStorage → embed */
 interface StudioBrandEmbedPayload {
@@ -312,12 +312,26 @@ export default function App() {
         layoutPatch.hideLogo = hideLogoStored === "1";
       }
 
-      const studioBrand = readAndClearStudioBrandSession() as StudioBrandEmbedPayload | null;
+      const studioBrand = peekStudioBrandSession() as StudioBrandEmbedPayload | null;
       if (studioBrand && typeof studioBrand === "object") {
         (layoutPatch as Partial<Settings>).brandFromStudio = studioBrand;
         if (studioBrand.logoPlacement) {
           (layoutPatch as { logoPosition?: string }).logoPosition =
             studioBrand.logoPlacement;
+        }
+        const bc = studioBrand.colors as
+          | { primary?: string; secondary?: string; text_body?: string }
+          | undefined;
+        if (bc?.primary && bc?.secondary) {
+          (layoutPatch as Partial<Settings>).textColorSettings = {
+            heading: { baseColor: bc.primary, useGradient: true, wordStyles: {} },
+            subheading: {
+              baseColor: bc.text_body || "#374151",
+              useGradient: false,
+              wordStyles: {},
+            },
+            footer: { baseColor: bc.secondary, useGradient: true, wordStyles: {} },
+          };
         }
       }
 

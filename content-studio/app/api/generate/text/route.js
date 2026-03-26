@@ -7,6 +7,7 @@ import {
 } from "@/lib/prompts/load-enkrypt-frontend-skill";
 import { composeSystemPromptWithHtmlVideoSkill } from "@/lib/prompts/load-html-video-builder-skill";
 import { ENKRYPT_ANTHROPIC_TEXT_GENERATION_MODEL } from "@/lib/designer-image/llmConstants";
+import { brandDisplayName } from "@/lib/brand/brandLogos";
 
 /** Vercel / long-running Claude completion (full HTML pages). */
 export const maxDuration = 300;
@@ -146,7 +147,7 @@ Use the **RUNTIME ASSETS** section in the system prompt for every logo or wordma
 Output **only** raw HTML: start with \`<!DOCTYPE html>\` or \`<html\`. No markdown code fences, no explanation after \`</html>\`.\n\n---\n\n${userMessage}`;
     }
     if (channel === "landing") {
-      userMessage = buildLandingUserMessage(input, tone, effectiveNumVariants);
+      userMessage = buildLandingUserMessage(input, tone, effectiveNumVariants, brand || null);
     } else if (tone && tone !== "Professional") {
       userMessage = `[TONE: ${tone} — adjust the voice and energy level to match this tone while maintaining brand guidelines]\n\n${userMessage}`;
     }
@@ -284,7 +285,7 @@ async function handleLandingRevise({
 }
 
 function buildLandingReviseUserMessage({ pageHtml, instructions, tone }) {
-  let body = `Revise the landing page **HTML document** per the instructions below. Return **only** the complete updated document (\`<!DOCTYPE html>\` through \`</html>\`), following the Enkrypt skill in your system prompt.
+  let body = `Revise the landing page **HTML document** per the instructions below. Return **only** the complete updated document (\`<!DOCTYPE html>\` through \`</html>\`), following the design skill + BRAND VISUAL OVERRIDE in your system prompt.
 
 === CURRENT HTML ===
 ${pageHtml}
@@ -299,15 +300,20 @@ ${instructions}`;
   return body;
 }
 
-function buildLandingUserMessage(rawInput, tone, numVariants) {
-  let msg = `[LANDING PAGE — Enkrypt AI]
+function buildLandingUserMessage(rawInput, tone, numVariants, brand = null) {
+  const who =
+    brand && typeof brand === "object"
+      ? brandDisplayName(brand)
+      : "the brand in BRAND GUIDELINES / RUNTIME ASSETS";
+  let msg = `[LANDING PAGE — ${who}]
 
-Build a **complete single-file marketing landing page** from the source material below. Your **entire** system prompt is the **enkrypt-frontend-design** skill plus RUNTIME ASSETS (logo URLs) and any brand guidelines.
+Build a **complete single-file marketing landing page** from the source material below. The system prompt includes the **enkrypt-frontend-design** layout/CSS patterns plus **RUNTIME ASSETS**, **BRAND VISUAL OVERRIDE**, and brand guidelines — treat those as **authoritative for name and colors**, not example copy inside the skill.
 
 RULES:
 - Output **only** one HTML document: from \`<!DOCTYPE html>\` through \`</html>\`.
+- **Nav, logo wordmark text, \`<title>\`, meta, hero, footer** must use **${who}** (and SOURCE) — never "Enkrypt AI" unless that is literally this brand.
 - Include all CSS in \`<style>\` (use the skill’s CSS variables and components). Include theme-toggle + logo \`src\` swap script using the **exact** logo URLs from RUNTIME ASSETS.
-- Use \`cta-primary\` / \`cta-secondary\` from the skill for buttons.
+- Primary CTAs / gradients must match **BRAND VISUAL OVERRIDE** when present.
 - Pick **one** design direction from the skill’s list and execute it fully.
 - No markdown code fences. No text before or after the HTML.`;
 
@@ -318,7 +324,7 @@ RULES:
   msg += `\n\n---\nSOURCE\n---\n\n${rawInput}`;
 
   if (tone && tone !== "Professional") {
-    msg = `[TONE: ${tone} — match voice while keeping Enkrypt brand visual system]\n\n${msg}`;
+    msg = `[TONE: ${tone} — match voice while keeping **${who}** colors and OVERRIDE]\n\n${msg}`;
   }
   return msg;
 }

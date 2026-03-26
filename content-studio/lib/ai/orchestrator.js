@@ -101,6 +101,7 @@ export async function generateDesignerStructure({
   postSizeId = "1080x1080",
   designerWhiteBg = false,
   customInstructions = "",
+  brand = null,
   apiKeys = {},
 }) {
   const response = await fetch("/api/generate/designer-structure", {
@@ -112,6 +113,7 @@ export async function generateDesignerStructure({
       postSizeId,
       designerWhiteBg: !!designerWhiteBg,
       customInstructions,
+      brand,
     }),
   });
 

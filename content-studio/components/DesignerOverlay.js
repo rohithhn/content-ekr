@@ -1,7 +1,10 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { writeStudioBrandToSession } from "@/lib/brand/studioBrandBridge";
+import {
+  writeStudioBrandToSession,
+  clearStudioBrandSession,
+} from "@/lib/brand/studioBrandBridge";
 
 const DESIGNER_INDEX = "/designer/index.html";
 
@@ -74,6 +77,14 @@ export default function DesignerOverlay({
   const iframeRef = useRef(null);
   const [iframeReady, setIframeReady] = useState(false);
   const skipPostUntilUserSwapRef = useRef(true);
+  const wasOpenRef = useRef(false);
+
+  useEffect(() => {
+    if (wasOpenRef.current && !open) {
+      clearStudioBrandSession();
+    }
+    wasOpenRef.current = open;
+  }, [open]);
 
   useEffect(() => {
     if (!open) {

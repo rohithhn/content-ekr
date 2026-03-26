@@ -6,7 +6,7 @@
 import {
   ENKRYPT_LOGO_FOR_DARK_BACKGROUND,
   ENKRYPT_LOGO_FOR_LIGHT_BACKGROUND,
-} from "@/lib/brand/enkrypt-defaults";
+} from "./enkrypt-defaults.js";
 
 export function toAbsoluteAssetUrl(pathOrUrl, origin) {
   if (!pathOrUrl) return "";
@@ -17,9 +17,18 @@ export function toAbsoluteAssetUrl(pathOrUrl, origin) {
   return base ? `${base}${p}` : pathOrUrl;
 }
 
-function brandCompanyLabel(brand) {
-  const s = (brand?.company_name || brand?.name || "").trim();
+/**
+ * Short / marketing name for nav, logo SVG, and prompts — **name** wins over company_name
+ * so a stale legal field does not override what the user set as the brand name in the editor.
+ */
+export function brandDisplayName(brand) {
+  if (!brand || typeof brand !== "object") return "Brand";
+  const s = (brand.name || brand.company_name || "").trim();
   return s || "Brand";
+}
+
+function brandCompanyLabel(brand) {
+  return brandDisplayName(brand);
 }
 
 function initialsFromLabel(label) {
@@ -140,5 +149,9 @@ export function buildBrandVisualDirectiveForHtml(brand) {
 - **Accent:** \`${c.accent}\` · **Background / surface:** \`${c.background}\` / \`${c.surface}\` · **Text:** headings \`${c.text_heading}\`, body \`${c.text_body}\`
 - **Typography:** "${hf}" (headings), "${bf}" (body) — load from Google Fonts if needed.
 - Do **not** default to Enkrypt orange #FF7404 / pink #FF3BA2 unless those exact values appear in the OVERRIDE lines above.
+
+## IDENTITY (non-negotiable)
+- The **only** correct product/company name for visible UI (nav, logo text, \`<title>\`, meta, hero, footer, \`alt\` beside the mark) is **"${label.replace(/"/g, '\\"')}"** (and phrasing from SOURCE when it names this brand).
+- Do **not** print **Enkrypt AI**, **Enkrypt**, or any other company name unless it appears verbatim in SOURCE as the actual brand being built.
 `.trim();
 }
