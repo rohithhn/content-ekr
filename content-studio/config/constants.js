@@ -238,3 +238,82 @@ export const AI_MODELS = [
   { id: "nanobanana", name: "Nano Banana", provider: "Nano Banana", type: "image", color: "#FFD93D", envKey: "NANOBANANA_API_KEY", keyField: "nanobanana_key", headerName: "x-nanobanana-key" },
   { id: "kling", name: "Kling 2.0", provider: "Kuaishou", type: "video", color: "#FF6B6B", envKey: "KLING_API_KEY", keyField: "kling_key", headerName: "x-kling-key" },
 ];
+
+/** Header “Models” menu — actual API model ids passed to `/api/generate/text`. */
+export const STUDIO_TEXT_MODEL_OPTIONS = [
+  { id: "claude-opus-4-6", label: "Claude Opus 4.6", short: "Opus" },
+  { id: "claude-sonnet-4-20250514", label: "Claude Sonnet 4", short: "Sonnet 4" },
+  { id: "claude-3-5-haiku-20241022", label: "Claude 3.5 Haiku", short: "Haiku" },
+];
+
+export const DEFAULT_STUDIO_TEXT_MODEL = "claude-opus-4-6";
+
+/** OpenAI image generation (`images.generate` model param) for designer + legacy pipelines. */
+export const STUDIO_IMAGE_MODEL_OPTIONS = [
+  { id: "gpt-image-1", label: "GPT Image 1", short: "Img 1" },
+  { id: "gpt-image-1.5", label: "GPT Image 1.5", short: "Img 1.5" },
+];
+
+export const DEFAULT_STUDIO_IMAGE_MODEL = "gpt-image-1";
+
+/** Forwarded to `/api/generate/video` (Kling or future providers). */
+export const STUDIO_VIDEO_MODEL_OPTIONS = [
+  { id: "kling-v2", label: "Kling 2.0", short: "Kling 2" },
+  { id: "kling-v1-6", label: "Kling 1.6", short: "Kling 1.6" },
+];
+
+export const DEFAULT_STUDIO_VIDEO_MODEL = "kling-v2";
+
+export function isStudioTextModelId(id) {
+  if (!id || typeof id !== "string") return false;
+  return STUDIO_TEXT_MODEL_OPTIONS.some((o) => o.id === id);
+}
+
+export function isStudioImageModelId(id) {
+  if (!id || typeof id !== "string") return false;
+  return STUDIO_IMAGE_MODEL_OPTIONS.some((o) => o.id === id);
+}
+
+export function isStudioVideoModelId(id) {
+  if (!id || typeof id !== "string") return false;
+  return STUDIO_VIDEO_MODEL_OPTIONS.some((o) => o.id === id);
+}
+
+const CE_STUDIO_MODELS_KEY = "ce_studio_models_v1";
+
+/** @returns {{ textModel: string, imageModel: string, videoModel: string }} */
+export function loadStudioModelPrefs() {
+  try {
+    const s = typeof localStorage !== "undefined" ? localStorage.getItem(CE_STUDIO_MODELS_KEY) : null;
+    if (!s) return null;
+    const o = JSON.parse(s);
+    return {
+      textModel: typeof o.textModel === "string" ? o.textModel : null,
+      imageModel: typeof o.imageModel === "string" ? o.imageModel : null,
+      videoModel: typeof o.videoModel === "string" ? o.videoModel : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function saveStudioModelPrefs(prefs) {
+  try {
+    if (typeof localStorage === "undefined") return;
+    localStorage.setItem(CE_STUDIO_MODELS_KEY, JSON.stringify(prefs));
+  } catch {
+    /* ignore */
+  }
+}
+
+export function normalizeStudioTextModel(id) {
+  return isStudioTextModelId(id) ? id : DEFAULT_STUDIO_TEXT_MODEL;
+}
+
+export function normalizeStudioImageModel(id) {
+  return isStudioImageModelId(id) ? id : DEFAULT_STUDIO_IMAGE_MODEL;
+}
+
+export function normalizeStudioVideoModel(id) {
+  return isStudioVideoModelId(id) ? id : DEFAULT_STUDIO_VIDEO_MODEL;
+}

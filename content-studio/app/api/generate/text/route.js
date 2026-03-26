@@ -8,6 +8,7 @@ import {
 import { composeSystemPromptWithHtmlVideoSkill } from "@/lib/prompts/load-html-video-builder-skill";
 import { ENKRYPT_ANTHROPIC_TEXT_GENERATION_MODEL } from "@/lib/designer-image/llmConstants";
 import { brandDisplayName } from "@/lib/brand/brandLogos";
+import { isStudioTextModelId } from "@/config/constants";
 
 /** Vercel / long-running Claude completion (full HTML pages). */
 export const maxDuration = 300;
@@ -42,6 +43,7 @@ function effectiveTextVariantsForChannel(channel, requested) {
  *   tone?: string,
  *   stream?: boolean,
  *   landingRevise?: { pageHtml?: string, sectionsHtml?: string, instructions: string }
+ *   textModel?: string — Anthropic model id (allowlisted); default Opus 4.6
  * }
  */
 const LANDING_REVISE_SYSTEM_SUFFIX = `
@@ -55,7 +57,23 @@ LANDING REVISE MODE (this request only):
 export async function POST(request) {
   try {
     const body = await request.json();
-    const { input, channel, templateId, brand, numVariants = 1, tone, stream = false, landingRevise } = body;
+    const {
+      input,
+      channel,
+      templateId,
+      brand,
+      numVariants = 1,
+      tone,
+      stream = false,
+      landingRevise,
+      textModel: textModelRaw,
+    } = body;
+
+    const requestedTextModel =
+      typeof textModelRaw === "string" ? textModelRaw.trim() : "";
+    const baseModel = isStudioTextModelId(requestedTextModel)
+      ? requestedTextModel
+      : ENKRYPT_ANTHROPIC_TEXT_GENERATION_MODEL;
 
     const landingPageHtmlRaw =
       landingRevise?.pageHtml != null ? landingRevise.pageHtml : landingRevise?.sectionsHtml;
@@ -117,12 +135,6 @@ export async function POST(request) {
         { origin: requestOrigin, brand: brand || null }
       );
     }
-
-    /**
-     * Opus 4.6: do not send `temperature` or `top_p` — the API errors if both appear
-     * (including implicit defaults).
-     */
-    const baseModel = ENKRYPT_ANTHROPIC_TEXT_GENERATION_MODEL;
 
     if (channel === "landing" && revise) {
       return handleLandingRevise({

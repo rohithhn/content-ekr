@@ -35,11 +35,21 @@ export async function generateText({
   tone = "Professional",
   stream = false,
   apiKeys = {},
+  textModel,
 }) {
   const response = await fetch("/api/generate/text", {
     method: "POST",
     headers: buildHeaders(apiKeys),
-    body: JSON.stringify({ input, channel, templateId, brand, numVariants, tone, stream }),
+    body: JSON.stringify({
+      input,
+      channel,
+      templateId,
+      brand,
+      numVariants,
+      tone,
+      stream,
+      ...(textModel ? { textModel } : {}),
+    }),
   });
 
   if (stream) return response;
@@ -65,6 +75,7 @@ export async function reviseLandingPage({
   tone = "Professional",
   stream = false,
   apiKeys = {},
+  textModel,
 }) {
   const response = await fetch("/api/generate/text", {
     method: "POST",
@@ -78,6 +89,7 @@ export async function reviseLandingPage({
       tone,
       stream,
       landingRevise: { sectionsHtml, instructions },
+      ...(textModel ? { textModel } : {}),
     }),
   });
 
@@ -238,11 +250,18 @@ export async function generateVideo({
   aspectRatio = "16:9",
   brand,
   apiKeys = {},
+  videoModel,
 }) {
   const response = await fetch("/api/generate/video", {
     method: "POST",
     headers: buildHeaders(apiKeys),
-    body: JSON.stringify({ prompt, duration, aspectRatio, brand }),
+    body: JSON.stringify({
+      prompt,
+      duration,
+      aspectRatio,
+      brand,
+      ...(videoModel ? { videoModel } : {}),
+    }),
   });
 
   if (!response.ok) {
@@ -261,6 +280,7 @@ export async function generateContentBundle({
   numTextVariants = 2,
   tone = "Professional",
   apiKeys = {},
+  textModel,
 }) {
   const bundle = {};
 
@@ -276,6 +296,7 @@ export async function generateContentBundle({
         numVariants: cappedVariants,
         tone,
         apiKeys,
+        textModel,
       });
       return { channelId, variants: result.variants, model: result.model };
     } catch (error) {

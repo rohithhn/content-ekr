@@ -8,10 +8,7 @@ import {
 } from "@/lib/designer-image/buildDesignerOpenAiPrompt";
 import { serializeStudioBrandForDesigner } from "@/lib/brand/studioBrandBridge";
 import { DESIGNER_OPENAI_IMAGE_MODEL } from "@/lib/designer-image/llmConstants";
-
-/** Fallback when not using designer-identical pipeline */
-const OPENAI_IMAGE_MODEL_LEGACY =
-  process.env.OPENAI_IMAGE_MODEL || "gpt-image-1.5";
+import { isStudioImageModelId } from "@/config/constants";
 
 /**
  * POST /api/generate/image
@@ -29,6 +26,7 @@ const OPENAI_IMAGE_MODEL_LEGACY =
  *   omitContentTextInImage?: boolean — default true (same as designer “Generate visual”: supporting bitmap only; H/S/F composed by app)
  *   designerHideLogo?: boolean — matches designer “Hide logo”; image prompt omits logo placement line
  *   imageProvider?: "openai" | "gemini" — fallback when no Anthropic key (visual brief chat step)
+ *   openaiImageModel?: string — allowlisted OpenAI `images.generate` model (designer + legacy paths)
  * }
  */
 export async function POST(request) {
@@ -50,7 +48,14 @@ export async function POST(request) {
       /** false = paint heading/subheading/footer into the image; true = designer default (visual only) */
       omitContentTextInImage = true,
       designerHideLogo = false,
+      openaiImageModel: openaiImageModelRaw,
     } = body;
+
+    const requestedImageModel =
+      typeof openaiImageModelRaw === "string" ? openaiImageModelRaw.trim() : "";
+    const openaiImageModel = isStudioImageModelId(requestedImageModel)
+      ? requestedImageModel
+      : DESIGNER_OPENAI_IMAGE_MODEL;
 
     if (provider === "openai") {
       const apiKey = request.headers.get("x-openai-key") || process.env.OPENAI_API_KEY;
@@ -122,7 +127,7 @@ export async function POST(request) {
           });
 
           const response = await client.images.generate({
-            model: DESIGNER_OPENAI_IMAGE_MODEL,
+            model: openaiImageModel,
             prompt,
             n: 1,
             size: "1024x1024",
@@ -166,7 +171,7 @@ export async function POST(request) {
       const images = [];
       for (let i = 0; i < numVariants; i++) {
         const response = await client.images.generate({
-          model: OPENAI_IMAGE_MODEL_LEGACY,
+          model: openaiImageModel,
           prompt,
           n: 1,
           size,

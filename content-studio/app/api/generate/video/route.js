@@ -1,22 +1,37 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
+import { isStudioVideoModelId, DEFAULT_STUDIO_VIDEO_MODEL } from "@/config/constants";
 
 /**
  * POST /api/generate/video
- * 
+ *
  * Generates short-form video using Kling 2.0 (Kuaishou).
  * Returns a job ID for polling since video generation is async.
- * 
+ *
  * Body: {
  *   prompt: string,
  *   duration: number,   // seconds (5, 10, 15)
  *   aspectRatio: string, // "16:9" | "9:16" | "1:1"
  *   brand?: object,
+ *   videoModel?: string — provider model id (e.g. Kling variant); forwarded when supported
  * }
  */
+
 export async function POST(request) {
   try {
     const body = await request.json();
-    const { prompt, duration = 10, aspectRatio = "16:9", brand } = body;
+    const {
+      prompt,
+      duration = 10,
+      aspectRatio = "16:9",
+      brand,
+      videoModel: videoModelRaw,
+    } = body;
+
+    const requestedVideo =
+      typeof videoModelRaw === "string" ? videoModelRaw.trim() : "";
+    const videoModel = isStudioVideoModelId(requestedVideo)
+      ? requestedVideo
+      : DEFAULT_STUDIO_VIDEO_MODEL;
 
     const apiKey = request.headers.get("x-kling-key") || process.env.KLING_API_KEY;
     if (!apiKey) {
@@ -60,6 +75,7 @@ export async function POST(request) {
         duration,
         aspect_ratio: aspectRatio,
         mode: "professional",
+        model: videoModel,
       }),
     });
 

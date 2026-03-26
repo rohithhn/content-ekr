@@ -1,7 +1,22 @@
 "use client";
 import { useState, useEffect, useRef, useMemo } from "react";
 import { createPortal } from "react-dom";
-import { CHANNELS, TEMPLATES, TONES, INPUT_MODES, AI_MODELS, getChannelVisualSlotNames } from "@/config/constants";
+import {
+  CHANNELS,
+  TEMPLATES,
+  TONES,
+  INPUT_MODES,
+  AI_MODELS,
+  getChannelVisualSlotNames,
+  STUDIO_TEXT_MODEL_OPTIONS,
+  STUDIO_IMAGE_MODEL_OPTIONS,
+  STUDIO_VIDEO_MODEL_OPTIONS,
+  loadStudioModelPrefs,
+  saveStudioModelPrefs,
+  normalizeStudioTextModel,
+  normalizeStudioImageModel,
+  normalizeStudioVideoModel,
+} from "@/config/constants";
 import { generateContentBundle, generateText, generateImage, generateDesignerStructure, parseUrl, prepareSourceArticle, analyzeUploadedFile, checkProviderStatus, reviseLandingPage } from "@/lib/ai/orchestrator";
 import { saveBrand, loadBrands, saveProject, loadProjects, loadProjectMessages } from "@/lib/db/index";
 import DesignerOverlay, { primeDesignerEmbed } from "@/components/DesignerOverlay";
@@ -65,6 +80,29 @@ function loadingTextForTextPhase(activeChannels) {
 /** Chevron for styled native `<select>` (no custom overlay / portal). */
 const NATIVE_SELECT_CHEVRON =
   "url(\"data:image/svg+xml;charset=UTF-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%238B8DA3' d='M3 4.5L6 7.5L9 4.5'/%3E%3C/svg%3E\")";
+
+const STUDIO_MODEL_SELECT_STYLE = {
+  width: "100%",
+  padding: "8px 28px 8px 10px",
+  borderRadius: 8,
+  border: "1px solid rgba(255,255,255,0.1)",
+  background: "rgba(0,0,0,0.35)",
+  color: "#E2E4EA",
+  fontSize: 12,
+  fontFamily: "inherit",
+  appearance: "none",
+  WebkitAppearance: "none",
+  backgroundImage: NATIVE_SELECT_CHEVRON,
+  backgroundRepeat: "no-repeat",
+  backgroundPosition: "right 8px center",
+  cursor: "pointer",
+  boxSizing: "border-box",
+};
+
+function studioModelShort(options, id) {
+  const o = options.find((x) => x.id === id);
+  return o?.short || id;
+}
 
 // ─── Shared Data ────────────────────────────────────────────────────────
 const GOOGLE_FONTS = ["Inter","DM Sans","Plus Jakarta Sans","Outfit","Manrope","Sora","Poppins","Nunito Sans","Lato","Raleway","Montserrat","Playfair Display","Crimson Pro","Merriweather","Source Serif 4","Space Grotesk","JetBrains Mono","IBM Plex Sans","Work Sans","Libre Franklin","Fira Code"];
@@ -536,7 +574,7 @@ function LeftPanel({ activeTab, setActiveTab, collapsed, brands, activeBrandId, 
 }
 
 // ─── Center Panel ───────────────────────────────────────────────────────
-function CenterPanel({ activeChannels, setActiveChannels, setActiveChannel, linkedinIncludeCarousel, setLinkedinIncludeCarousel, activeBrand, apiKeys, serverStatus, onSelectPreview, messages, setMessages, projectTitle, selectedTemplateId, setSelectedTemplateId, inputMode, setInputMode, tone, setTone, isGenerating, setIsGenerating, generationPhase, setGenerationPhase, addToast, onRegenerate, onGenerateImage, onOpenDesigner, designerPostSizeId, setDesignerPostSizeId, designerWhiteBg, setDesignerWhiteBg, designerThemeId, setDesignerThemeId, designerHideLogo = false }) {
+function CenterPanel({ activeChannels, setActiveChannels, setActiveChannel, linkedinIncludeCarousel, setLinkedinIncludeCarousel, activeBrand, apiKeys, serverStatus, onSelectPreview, messages, setMessages, projectTitle, selectedTemplateId, setSelectedTemplateId, inputMode, setInputMode, tone, setTone, isGenerating, setIsGenerating, generationPhase, setGenerationPhase, addToast, onRegenerate, onGenerateImage, onOpenDesigner, designerPostSizeId, setDesignerPostSizeId, designerWhiteBg, setDesignerWhiteBg, designerThemeId, setDesignerThemeId, designerHideLogo = false, studioTextModel }) {
   const [inputValue, setInputValue] = useState("");
   const [uploadFile, setUploadFile] = useState(null);
   const [numText, setNumText] = useState(3); const [numVisual, setNumVisual] = useState(3); const [welcome, setWelcome] = useState(true);
@@ -653,7 +691,16 @@ function CenterPanel({ activeChannels, setActiveChannels, setActiveChannel, link
         p.map((m) => (m.id === userMsgId ? { ...m, preparedInput: contentInput } : m)),
       );
 
-      const bundle = await generateContentBundle({ input: contentInput, channels: activeChannels, templateId: selectedTemplateId || null, brand: activeBrand || null, numTextVariants: numText, tone, apiKeys });
+      const bundle = await generateContentBundle({
+        input: contentInput,
+        channels: activeChannels,
+        templateId: selectedTemplateId || null,
+        brand: activeBrand || null,
+        numTextVariants: numText,
+        tone,
+        apiKeys,
+        textModel: studioTextModel,
+      });
 
       for (const channelId of activeChannels) {
         if (bundle[channelId]) {
@@ -922,7 +969,7 @@ function CenterPanel({ activeChannels, setActiveChannels, setActiveChannel, link
 }
 
 // ─── Right Panel ────────────────────────────────────────────────────────
-function RightPanel({ activeChannels, setActiveChannels, activeChannel, setActiveChannel, collapsed, previewData, addToast, activeBrand, onTextEdit, onOpenDesigner, designerPostSizeId = "1080x1080-trns", designerWhiteBg = true, designerHideLogo = false, width = 380, apiKeys = {}, tone = "Professional", selectedTemplateId = null }) {
+function RightPanel({ activeChannels, setActiveChannels, activeChannel, setActiveChannel, collapsed, previewData, addToast, activeBrand, onTextEdit, onOpenDesigner, designerPostSizeId = "1080x1080-trns", designerWhiteBg = true, designerHideLogo = false, width = 380, apiKeys = {}, tone = "Professional", selectedTemplateId = null, studioTextModel }) {
   if (collapsed) return null;
   const pd = previewData || {};
   const text = pd.text != null && pd.text !== "" ? pd.text : "Your generated content will appear here...";
@@ -992,6 +1039,7 @@ function RightPanel({ activeChannels, setActiveChannels, activeChannel, setActiv
         tone,
         numVariants: 1,
         apiKeys,
+        textModel: studioTextModel,
       });
       const newText = result.variants?.[0]?.text?.trim();
       if (!newText) throw new Error("Empty response from model");
@@ -1444,6 +1492,18 @@ export default function Workspace({ user, onLogout }) {
   const [designerWhiteBg, setDesignerWhiteBg] = useState(true);
   const [designerThemeId, setDesignerThemeId] = useState("none");
   const [designerHideLogo, setDesignerHideLogo] = useState(false);
+  const [studioTextModel, setStudioTextModel] = useState(() =>
+    normalizeStudioTextModel(loadStudioModelPrefs()?.textModel)
+  );
+  const [studioImageModel, setStudioImageModel] = useState(() =>
+    normalizeStudioImageModel(loadStudioModelPrefs()?.imageModel)
+  );
+  const [studioVideoModel, setStudioVideoModel] = useState(() =>
+    normalizeStudioVideoModel(loadStudioModelPrefs()?.videoModel)
+  );
+  const [modelsMenuOpen, setModelsMenuOpen] = useState(false);
+  const modelsBtnRef = useRef(null);
+  const modelsMenuRef = useRef(null);
   const addToast = (message, type = "info") => { const id = Date.now() + Math.random(); setToasts(p => [...p, { id, message, type }]); setTimeout(() => setToasts(p => p.filter(t => t.id !== id)), 3500); };
   const designerLayoutForEmbed = () => ({
     postSizeId: designerPostSizeId,
@@ -1572,6 +1632,14 @@ export default function Workspace({ user, onLogout }) {
   useEffect(() => { if (activeProjectId) try { localStorage.setItem("ce_active_project", activeProjectId); } catch {} }, [activeProjectId]);
 
   useEffect(() => {
+    saveStudioModelPrefs({
+      textModel: studioTextModel,
+      imageModel: studioImageModel,
+      videoModel: studioVideoModel,
+    });
+  }, [studioTextModel, studioImageModel, studioVideoModel]);
+
+  useEffect(() => {
     if (!activeProjectId || isGenerating) return;
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(() => {
@@ -1682,6 +1750,36 @@ export default function Workspace({ user, onLogout }) {
   }, [brandDrop]);
 
   useEffect(() => {
+    if (!modelsMenuOpen) return;
+    const onKey = (e) => {
+      if (e.key === "Escape") setModelsMenuOpen(false);
+    };
+    const onDocDown = (e) => {
+      const menu = modelsMenuRef.current;
+      const btn = modelsBtnRef.current;
+      const path = typeof e.composedPath === "function" ? e.composedPath() : [];
+      if (path.length > 0) {
+        if (menu && path.includes(menu)) return;
+        if (btn && path.includes(btn)) return;
+      } else {
+        let t = e.target;
+        if (t && t.nodeType === Node.TEXT_NODE) t = t.parentElement;
+        if (!t) return;
+        if (menu && menu.contains(t)) return;
+        if (btn && btn.contains(t)) return;
+      }
+      setModelsMenuOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    const tid = window.setTimeout(() => document.addEventListener("mousedown", onDocDown), 0);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.clearTimeout(tid);
+      document.removeEventListener("mousedown", onDocDown);
+    };
+  }, [modelsMenuOpen]);
+
+  useEffect(() => {
     const lastAi = [...currentMessages].reverse().find(m => m.role === "assistant");
     if (!lastAi?.bundle) return;
     const ch = activeChannel;
@@ -1733,6 +1831,7 @@ export default function Workspace({ user, onLogout }) {
         numVariants,
         tone: userMsg.tone || tone,
         apiKeys,
+        textModel: studioTextModel,
       });
       setCurrentMessages(p => p.map(m => { if (m.id !== messageId) return m; const bundle = { ...m.bundle }; bundle[channelId] = { ...bundle[channelId], textVariants: result.variants, selectedTextIdx: 0 }; return { ...m, bundle }; }));
       addToast(`Regenerated ${CHANNELS.find(c => c.id === channelId)?.label || channelId}`, "success");
@@ -1816,6 +1915,7 @@ export default function Workspace({ user, onLogout }) {
             extractedContent: extractedForImages,
             designerImage: true,
             omitContentTextInImage: true,
+            openaiImageModel: studioImageModel,
           },
         });
         if (result.images?.[0]?.url) {
@@ -1913,6 +2013,79 @@ export default function Workspace({ user, onLogout }) {
       <div style={{ width: 1, height: 24, background: "rgba(255,255,255,0.08)", margin: "0 4px" }} />
       <input value={projectTitle} onChange={e => setProjectTitle(e.target.value)} style={{ background: "transparent", border: "none", color: "#8B8DA3", fontSize: 14, fontWeight: 500, fontFamily: "inherit", outline: "none", padding: "4px 8px", borderRadius: 6, maxWidth: 200 }} onFocus={e => { e.target.style.background = "rgba(255,255,255,0.05)"; e.target.style.color = "#E2E4EA"; }} onBlur={e => { e.target.style.background = "transparent"; e.target.style.color = "#8B8DA3"; }} />
       <div style={{ flex: 1 }} />
+      <div style={{ position: "relative" }}>
+        <button
+          type="button"
+          ref={modelsBtnRef}
+          onClick={() => setModelsMenuOpen((o) => !o)}
+          title="Choose models for content, images, and video APIs"
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "flex-start",
+            gap: 2,
+            padding: "5px 12px",
+            borderRadius: 9,
+            border: "1px solid rgba(255,255,255,0.08)",
+            background: modelsMenuOpen ? "rgba(108,43,217,0.12)" : "rgba(255,255,255,0.03)",
+            cursor: "pointer",
+            fontFamily: "inherit",
+            maxWidth: 220,
+          }}
+        >
+          <span style={{ fontSize: 11, fontWeight: 700, color: "#A0A3B1", textTransform: "uppercase", letterSpacing: "0.04em" }}>Models</span>
+          <span style={{ fontSize: 10, color: "#6B7084", lineHeight: 1.3, textAlign: "left", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "100%" }}>
+            {studioModelShort(STUDIO_TEXT_MODEL_OPTIONS, studioTextModel)} · {studioModelShort(STUDIO_IMAGE_MODEL_OPTIONS, studioImageModel)} · {studioModelShort(STUDIO_VIDEO_MODEL_OPTIONS, studioVideoModel)}
+          </span>
+        </button>
+        {modelsMenuOpen && (
+          <div
+            ref={modelsMenuRef}
+            onMouseDown={(e) => e.stopPropagation()}
+            style={{
+              position: "absolute",
+              top: "110%",
+              right: 0,
+              zIndex: 200,
+              background: "#1A1B23",
+              border: "1px solid rgba(255,255,255,0.1)",
+              borderRadius: 12,
+              padding: "12px 14px",
+              minWidth: 280,
+              boxShadow: "0 12px 40px rgba(0,0,0,0.5)",
+            }}
+          >
+            <div style={{ fontSize: 11, fontWeight: 700, color: "#52556B", textTransform: "uppercase", marginBottom: 14, letterSpacing: "0.5px" }}>Generation models</div>
+            <label style={{ display: "block", marginBottom: 12 }}>
+              <span style={{ display: "block", fontSize: 11, color: "#8B8DA3", marginBottom: 6 }}>Content (Claude)</span>
+              <select value={studioTextModel} onChange={(e) => setStudioTextModel(normalizeStudioTextModel(e.target.value))} style={STUDIO_MODEL_SELECT_STYLE}>
+                {STUDIO_TEXT_MODEL_OPTIONS.map((o) => (
+                  <option key={o.id} value={o.id}>{o.label}</option>
+                ))}
+              </select>
+            </label>
+            <label style={{ display: "block", marginBottom: 12 }}>
+              <span style={{ display: "block", fontSize: 11, color: "#8B8DA3", marginBottom: 6 }}>Image (OpenAI)</span>
+              <select value={studioImageModel} onChange={(e) => setStudioImageModel(normalizeStudioImageModel(e.target.value))} style={STUDIO_MODEL_SELECT_STYLE}>
+                {STUDIO_IMAGE_MODEL_OPTIONS.map((o) => (
+                  <option key={o.id} value={o.id}>{o.label}</option>
+                ))}
+              </select>
+            </label>
+            <label style={{ display: "block", marginBottom: 4 }}>
+              <span style={{ display: "block", fontSize: 11, color: "#8B8DA3", marginBottom: 6 }}>Video (Kling)</span>
+              <select value={studioVideoModel} onChange={(e) => setStudioVideoModel(normalizeStudioVideoModel(e.target.value))} style={STUDIO_MODEL_SELECT_STYLE}>
+                {STUDIO_VIDEO_MODEL_OPTIONS.map((o) => (
+                  <option key={o.id} value={o.id}>{o.label}</option>
+                ))}
+              </select>
+            </label>
+            <p style={{ margin: "10px 0 0", fontSize: 10, color: "#52556B", lineHeight: 1.45 }}>
+              Video model is sent with POST /api/generate/video when you call video generation from the app.
+            </p>
+          </div>
+        )}
+      </div>
       <div style={{ position: "relative" }}><button type="button" ref={brandBtnRef} onClick={() => setBrandDrop(!brandDrop)} style={{ display: "flex", alignItems: "center", gap: 10, padding: "6px 14px", borderRadius: 9, border: "1px solid rgba(255,255,255,0.08)", background: "rgba(255,255,255,0.03)", cursor: "pointer", fontFamily: "inherit" }}><div style={{ width: 22, height: 22, borderRadius: 5, background: activeBrand ? brandGradientCss(activeBrand) : "#333", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, fontWeight: 800, color: "white" }}>{brandInitial(activeBrand)}</div><span style={{ fontSize: 13, fontWeight: 600, color: "#E2E4EA" }}>{activeBrand?.name || "Brand"}</span><span style={{ fontSize: 10, color: "#6B7084" }}>▾</span></button>
         {brandDrop && (<div ref={brandMenuRef} style={{ position: "absolute", top: "110%", right: 0, zIndex: 200, background: "#1A1B23", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 12, padding: 6, minWidth: 240, boxShadow: "0 12px 40px rgba(0,0,0,0.5)" }}>{brands.map(brand => (<button key={brand.id} type="button" onClick={() => { setActiveBrandId(brand.id); setBrandDrop(false); }} style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: "none", background: activeBrandId === brand.id ? "rgba(108,43,217,0.15)" : "transparent", cursor: "pointer", fontFamily: "inherit", textAlign: "left", display: "flex", alignItems: "center", gap: 10 }} onMouseEnter={e => { if (activeBrandId !== brand.id) e.currentTarget.style.background = "rgba(255,255,255,0.05)"; }} onMouseLeave={e => { if (activeBrandId !== brand.id) e.currentTarget.style.background = "transparent"; }}><div style={{ width: 28, height: 28, borderRadius: 6, background: brandGradientCss(brand), display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 800, color: "white" }}>{brandInitial(brand)}</div><div style={{ flex: 1 }}><div style={{ fontSize: 13, fontWeight: 600, color: "#E2E4EA" }}>{brand.name}</div><div style={{ fontSize: 11, color: "#6B7084" }}>{brand.tagline}</div></div>{activeBrandId === brand.id && <span style={{ color: "#6C2BD9" }}>✓</span>}</button>))}<div style={{ borderTop: "1px solid rgba(255,255,255,0.06)", margin: "4px 0", padding: "4px 0 0" }}><button type="button" onClick={() => { setBrandDrop(false); openBrandEditor(null); }} style={{ width: "100%", padding: "8px 12px", borderRadius: 8, border: "none", background: "transparent", cursor: "pointer", fontFamily: "inherit", color: "#6B7084", fontSize: 12, textAlign: "left", display: "flex", alignItems: "center", gap: 8 }} onMouseEnter={e => e.currentTarget.style.color = "#C4B5FD"} onMouseLeave={e => e.currentTarget.style.color = "#6B7084"}>+ New Brand</button></div></div>)}
       </div>
@@ -1927,9 +2100,9 @@ export default function Workspace({ user, onLogout }) {
     <div style={{ flex: 1, display: "flex", overflow: "hidden" }}>
       <LeftPanel activeTab={leftTab} setActiveTab={setLeftTab} collapsed={leftCollapsed} brands={brands} activeBrandId={activeBrandId} onOpenBrandEditor={openBrandEditor} onSelectBrand={setActiveBrandId} projects={projects} onSelectProject={selectProject} activeProjectId={activeProjectId} onNewProject={newProject} onSelectTemplate={selectTemplate} selectedTemplateId={selectedTemplateId} width={leftWidth} />
       {!leftCollapsed && <PanelDivider onDrag={(dx) => setLeftWidth(w => Math.max(200, Math.min(500, w + dx)))} />}
-      <CenterPanel activeChannels={activeChannels} setActiveChannels={setActiveChannels} setActiveChannel={setActiveChannel} linkedinIncludeCarousel={linkedinIncludeCarousel} setLinkedinIncludeCarousel={setLinkedinIncludeCarousel} activeBrand={activeBrand} apiKeys={apiKeys} serverStatus={serverStatus} onSelectPreview={setPreviewData} messages={currentMessages} setMessages={setCurrentMessages} projectTitle={projectTitle} selectedTemplateId={selectedTemplateId} setSelectedTemplateId={setSelectedTemplateId} inputMode={inputMode} setInputMode={setInputMode} tone={tone} setTone={setTone} isGenerating={isGenerating} setIsGenerating={setIsGenerating} generationPhase={generationPhase} setGenerationPhase={setGenerationPhase} addToast={addToast} onRegenerate={regenerateChannel} onGenerateImage={generateAllImages} onOpenDesigner={openDesignerWithImage} designerPostSizeId={designerPostSizeId} setDesignerPostSizeId={setDesignerPostSizeId} designerWhiteBg={designerWhiteBg} setDesignerWhiteBg={setDesignerWhiteBg} designerThemeId={designerThemeId} setDesignerThemeId={setDesignerThemeId} designerHideLogo={designerHideLogo} />
+      <CenterPanel activeChannels={activeChannels} setActiveChannels={setActiveChannels} setActiveChannel={setActiveChannel} linkedinIncludeCarousel={linkedinIncludeCarousel} setLinkedinIncludeCarousel={setLinkedinIncludeCarousel} activeBrand={activeBrand} apiKeys={apiKeys} serverStatus={serverStatus} onSelectPreview={setPreviewData} messages={currentMessages} setMessages={setCurrentMessages} projectTitle={projectTitle} selectedTemplateId={selectedTemplateId} setSelectedTemplateId={setSelectedTemplateId} inputMode={inputMode} setInputMode={setInputMode} tone={tone} setTone={setTone} isGenerating={isGenerating} setIsGenerating={setIsGenerating} generationPhase={generationPhase} setGenerationPhase={setGenerationPhase} addToast={addToast} onRegenerate={regenerateChannel} onGenerateImage={generateAllImages} onOpenDesigner={openDesignerWithImage} designerPostSizeId={designerPostSizeId} setDesignerPostSizeId={setDesignerPostSizeId} designerWhiteBg={designerWhiteBg} setDesignerWhiteBg={setDesignerWhiteBg} designerThemeId={designerThemeId} setDesignerThemeId={setDesignerThemeId} designerHideLogo={designerHideLogo} studioTextModel={studioTextModel} />
       {!rightCollapsed && <PanelDivider onDrag={(dx) => setRightWidth(w => Math.max(280, Math.min(600, w - dx)))} />}
-      <RightPanel activeChannels={activeChannels} setActiveChannels={setActiveChannels} activeChannel={activeChannel} setActiveChannel={setActiveChannel} collapsed={rightCollapsed} previewData={previewData} addToast={addToast} activeBrand={activeBrand} onTextEdit={handlePreviewTextEdit} onOpenDesigner={openDesignerWithImage} designerPostSizeId={designerPostSizeId} designerWhiteBg={designerWhiteBg} designerHideLogo={designerHideLogo} width={rightWidth} apiKeys={apiKeys} tone={tone} selectedTemplateId={selectedTemplateId} />
+      <RightPanel activeChannels={activeChannels} setActiveChannels={setActiveChannels} activeChannel={activeChannel} setActiveChannel={setActiveChannel} collapsed={rightCollapsed} previewData={previewData} addToast={addToast} activeBrand={activeBrand} onTextEdit={handlePreviewTextEdit} onOpenDesigner={openDesignerWithImage} designerPostSizeId={designerPostSizeId} designerWhiteBg={designerWhiteBg} designerHideLogo={designerHideLogo} width={rightWidth} apiKeys={apiKeys} tone={tone} selectedTemplateId={selectedTemplateId} studioTextModel={studioTextModel} />
     </div>
 
     <ApiKeysModal open={showApiKeys} onClose={() => setShowApiKeys(false)} apiKeys={apiKeys} setApiKeys={setApiKeys} serverStatus={serverStatus} addToast={addToast} />
